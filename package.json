@@ -1,0 +1,21 @@
+{
+  "name": "kirvano-system",
+  "version": "1.0.0",
+  "description": "Sistema de funis Kirvano com fallback Evolution API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": ["kirvano", "evolution", "whatsapp", "funis"],
+  "author": "Kirvano System",
+  "license": "ISC"
+}
