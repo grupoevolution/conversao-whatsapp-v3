@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kirvano - Simulador de Testes</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            min-height: 100vh;
+            color: #333;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #6b7280;
+        }
+
+        .test-card {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .test-card h3 {
+            color: #1f2937;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+        }
+
+        .form-select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            background: white;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+        }
+
+        .result {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .result.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+
+        .result.error {
+            background: #fecaca;
+            color: #991b1b;
+            border: 1px solid #dc2626;
+        }
+
+        .quick-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .preset-card {
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+
+        .preset-card h4 {
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .preset-card p {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .logs-container {
+            background: #1f2937;
+            color: #f9fafb;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: monospace;
+            font-size: 13px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+        }
+
+        .log-success { color: #10b981; }
+        .log-error { color: #ef4444; }
+        .log-info { color: #3b82f6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 Simulador de Testes Kirvano</h1>
+            <p>Simule eventos de compra para testar seus funis sem precisar fazer vendas reais</p>
+        </div>
+
+        <!-- TESTES RÁPIDOS -->
+        <div class="test-card">
+            <h3>⚡ Testes Rápidos</h3>
+            
+            <div class="preset-card">
+                <h4>CS - Compra Aprovada</h4>
+                <p>Simula uma compra aprovada do produto CS</p>
+                <button class="btn" onclick="sendQuickTest('CS', 'APPROVED')">Testar CS Aprovada</button>
+            </div>
+            
+            <div class="preset-card">
+                <h4>CS - PIX Pendente</h4>
+                <p>Simula um PIX gerado e pendente do produto CS</p>
+                <button class="btn" onclick="sendQuickTest('CS', 'PIX')">Testar CS PIX</button>
+            </div>
+            
+            <div class="preset-card">
+                <h4>FAB - Compra Aprovada</h4>
+                <p>Simula uma compra aprovada do produto FAB</p>
+                <button class="btn" onclick="sendQuickTest('FAB', 'APPROVED')">Testar FAB Aprovada</button>
+            </div>
+            
+            <div class="preset-card">
+                <h4>FAB - PIX Pendente</h4>
+                <p>Simula um PIX gerado e pendente do produto FAB</p>
+                <button class="btn" onclick="sendQuickTest('FAB', 'PIX')">Testar FAB PIX</button>
+            </div>
+        </div>
+
+        <!-- TESTE CUSTOMIZADO -->
+        <div class="test-card">
+            <h3>🎛️ Teste Customizado</h3>
+            
+            <div class="form-group">
+                <label class="form-label">Nome do Cliente</label>
+                <input type="text" id="customerName" class="form-input" value="João Silva" placeholder="Nome do cliente teste">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Telefone (com código do país)</label>
+                <input type="text" id="customerPhone" class="form-input" value="5511999999999" placeholder="5511999999999">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Produto</label>
+                <select id="productType" class="form-select">
+                    <option value="CS">CS (Curso/Serviço)</option>
+                    <option value="FAB">FAB (Fábrica)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Tipo de Evento</label>
+                <select id="eventType" class="form-select">
+                    <option value="APPROVED">Compra Aprovada</option>
+                    <option value="PIX">PIX Pendente</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Valor</label>
+                <input type="text" id="totalPrice" class="form-input" value="R$ 197,00" placeholder="R$ 197,00">
+            </div>
+            
+            <button class="btn" onclick="sendCustomTest()">Enviar Teste Customizado</button>
+            
+            <div id="customResult"></div>
+        </div>
+
+        <!-- LOGS EM TEMPO REAL -->
+        <div class="test-card">
+            <h3>📋 Logs do Sistema</h3>
+            <button class="btn btn-secondary" onclick="loadLogs()" style="margin-bottom: 16px;">Atualizar Logs</button>
+            <div id="logsContainer" class="logs-container">
+                <div class="log-entry">Carregando logs...</div>
+            </div>
+        </div>
+
+        <!-- DEBUG EVOLUTION -->
+        <div class="test-card">
+            <h3>🔧 Debug Evolution API</h3>
+            <button class="btn btn-secondary" onclick="debugEvolution()" style="margin-bottom: 16px;">Verificar Configuração</button>
+            <div id="debugContainer">
+                <div class="log-entry">Clique no botão acima para verificar a configuração da Evolution API</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Mapeamento de produtos para offer_ids
+        const PRODUCT_OFFERS = {
+            'CS': '5c1f6390-8999-4740-b16f-51380e1097e4',
+            'FAB': '5288799c-d8e3-48ce-a91d-587814acdee5'
+        };
+
+        // TESTES RÁPIDOS
+        async function sendQuickTest(product, eventType) {
+            const randomPhone = '5511' + Math.floor(Math.random() * 1000000000).toString().padStart(9, '0');
+            const customerName = 'Cliente Teste ' + Math.floor(Math.random() * 1000);
+            
+            const eventData = createEventData(customerName, randomPhone, product, eventType, 'R$ 197,00');
+            
+            try {
+                const response = await fetch('/webhook/kirvano', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(eventData)
+                });
+                
+                const result = await response.json();
+                
+                // Mostrar resultado
+                showResult(`Teste ${product} ${eventType} enviado com sucesso!
+Telefone: ${randomPhone}
+Cliente: ${customerName}
+Resposta: ${JSON.stringify(result, null, 2)}`, 'success');
+                
+                // Atualizar logs
+                setTimeout(loadLogs, 1000);
+                
+            } catch (error) {
+                showResult('Erro ao enviar teste: ' + error.message, 'error');
+            }
+        }
+
+        // TESTE CUSTOMIZADO
+        async function sendCustomTest() {
+            const customerName = document.getElementById('customerName').value;
+            const customerPhone = document.getElementById('customerPhone').value;
+            const productType = document.getElementById('productType').value;
+            const eventType = document.getElementById('eventType').value;
+            const totalPrice = document.getElementById('totalPrice').value;
+            
+            if (!customerName || !customerPhone) {
+                showCustomResult('Preencha nome e telefone!', 'error');
+                return;
+            }
+            
+            const eventData = createEventData(customerName, customerPhone, productType, eventType, totalPrice);
+            
+            try {
+                const response = await fetch('/webhook/kirvano', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(eventData)
+                });
+                
+                const result = await response.json();
+                
+                showCustomResult(`Evento enviado com sucesso!
+Resposta: ${JSON.stringify(result, null, 2)}`, 'success');
+                
+                // Atualizar logs
+                setTimeout(loadLogs, 1000);
+                
+            } catch (error) {
+                showCustomResult('Erro ao enviar: ' + error.message, 'error');
+            }
+        }
+
+        // CRIAR DADOS DO EVENTO
+        function createEventData(customerName, customerPhone, productType, eventType, totalPrice) {
+            const offerId = PRODUCT_OFFERS[productType];
+            const saleId = 'TEST_' + Date.now();
+            
+            let event, status, method;
+            
+            if (eventType === 'APPROVED') {
+                event = 'SALE_APPROVED';
+                status = 'APPROVED';
+                method = 'CREDIT_CARD';
+            } else {
+                event = 'PIX_GENERATED';
+                status = 'PENDING';
+                method = 'PIX';
+            }
+            
+            return {
+                event: event,
+                status: status,
+                sale_id: saleId,
+                checkout_id: saleId,
+                customer: {
+                    name: customerName,
+                    phone_number: customerPhone
+                },
+                total_price: totalPrice,
+                products: [
+                    {
+                        offer_id: offerId,
+                        name: productType + ' - Produto Teste'
+                    }
+                ],
+                payment: {
+                    method: method,
+                    qrcode_image: eventType === 'PIX' ? 'https://exemplo.com/qr-code.png' : null
+                }
+            };
+        }
+
+        // MOSTRAR RESULTADOS
+        function showResult(message, type) {
+            // Criar elemento de resultado temporário
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'result ' + type;
+            resultDiv.textContent = message;
+            
+            // Adicionar após o último botão de teste rápido
+            const lastPreset = document.querySelectorAll('.preset-card');
+            lastPreset[lastPreset.length - 1].appendChild(resultDiv);
+            
+            // Remover após 5 segundos
+            setTimeout(() => {
+                if (resultDiv.parentNode) {
+                    resultDiv.parentNode.removeChild(resultDiv);
+                }
+            }, 5000);
+        }
+
+        function showCustomResult(message, type) {
+            const resultDiv = document.getElementById('customResult');
+            resultDiv.className = 'result ' + type;
+            resultDiv.textContent = message;
+            
+            // Remover após 10 segundos
+            setTimeout(() => {
+                resultDiv.innerHTML = '';
+                resultDiv.className = '';
+            }, 10000);
+        }
+
+        // CARREGAR LOGS
+        async function loadLogs() {
+            try {
+                const response = await fetch('/api/logs?limit=20');
+                const result = await response.json();
+                
+                if (result.success) {
+                    renderLogs(result.data);
+                } else {
+                    document.getElementById('logsContainer').innerHTML = 
+                        '<div class="log-entry log-error">Erro ao carregar logs</div>';
+                }
+            } catch (error) {
+                document.getElementById('logsContainer').innerHTML = 
+                    '<div class="log-entry log-error">Erro de conexão: ' + error.message + '</div>';
+            }
+        }
+
+        function renderLogs(logs) {
+            const container = document.getElementById('logsContainer');
+            
+            if (logs.length === 0) {
+                container.innerHTML = '<div class="log-entry">Nenhum log disponível</div>';
+                return;
+            }
+
+            let html = '';
+            logs.forEach(log => {
+                const timestamp = new Date(log.timestamp).toLocaleTimeString('pt-BR');
+                let className = 'log-entry';
+                
+                if (log.type.includes('ERROR') || log.type.includes('FAILED')) {
+                    className += ' log-error';
+                } else if (log.type.includes('SUCCESS') || log.type.includes('START')) {
+                    className += ' log-success';
+                } else {
+                    className += ' log-info';
+                }
+
+                html += `<div class="${className}">[${timestamp}] ${log.type}: ${log.message}</div>`;
+            });
+
+            container.innerHTML = html;
+            
+            // Scroll para o topo
+            container.scrollTop = 0;
+        }
+
+        // DEBUG EVOLUTION
+        async function debugEvolution() {
+            const container = document.getElementById('debugContainer');
+            container.innerHTML = '<div class="log-entry log-info">Verificando configuração...</div>';
+            
+            try {
+                const response = await fetch('/api/debug/evolution');
+                const debug = await response.json();
+                
+                let html = '';
+                
+                // Configuração
+                html += '<div class="log-entry log-info">URL Evolution: ' + debug.evolution_base_url + '</div>';
+                html += '<div class="log-entry ' + (debug.evolution_api_key_configured ? 'log-success' : 'log-error') + '">';
+                html += 'API Key: ' + (debug.evolution_api_key_configured ? 'Configurada (' + debug.evolution_api_key_length + ' caracteres)' : 'NÃO CONFIGURADA');
+                html += '</div>';
+                
+                html += '<div class="log-entry log-info">Instâncias: ' + debug.instances.join(', ') + '</div>';
+                
+                // Resultado do teste
+                if (debug.test_results.length > 0) {
+                    const test = debug.test_results[0];
+                    html += '<div class="log-entry log-info">--- Teste de Conexão ---</div>';
+                    
+                    if (test.error) {
+                        html += '<div class="log-entry log-error">Erro: ' + test.error + '</div>';
+                        if (test.code) {
+                            html += '<div class="log-entry log-error">Código: ' + test.code + '</div>';
+                        }
+                    } else {
+                        html += '<div class="log-entry ' + (test.status === 200 ? 'log-success' : 'log-error') + '">';
+                        html += 'Status HTTP: ' + test.status + '</div>';
+                        html += '<div class="log-entry log-info">URL Testada: ' + test.url + '</div>';
+                        html += '<div class="log-entry log-info">Resposta: ' + JSON.stringify(test.response, null, 2) + '</div>';
+                    }
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                container.innerHTML = '<div class="log-entry log-error">Erro ao verificar: ' + error.message + '</div>';
+            }
+        }
+
+        // AUTO-REFRESH DOS LOGS
+        setInterval(loadLogs, 5000);
+        
+        // CARREGAR LOGS INICIAL
+        loadLogs();
+    </script>
+</body>
+</html>
