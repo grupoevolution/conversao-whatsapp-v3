@@ -14,6 +14,8 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'funnels.json');
 const CONVERSATIONS_FILE = path.join(__dirname, 'data', 'conversations.json');
 const PHRASES_FILE = path.join(__dirname, 'data', 'phrases.json');
+const LOGS_FILE = path.join(__dirname, 'data', 'logs.json');
+const MANUAL_TRIGGERS_FILE = path.join(__dirname, 'data', 'manual_triggers.json');
 
 // Produtos CS e FB
 const PRODUCT_MAPPING = {
@@ -23,8 +25,11 @@ const PRODUCT_MAPPING = {
     '5288799c-d8e3-48ce-a91d-587814acdee5': 'FB'
 };
 
-// Instâncias Evolution (12 instâncias)
-const INSTANCES = ['GABY01', 'GABY02', 'GABY03', 'GABY04', 'GABY05', 'GABY06', 'GABY07', 'GABY08', 'GABY09', 'GABY10', 'GABY11', 'GABY12'];
+const INSTANCES = [
+    'GABY01', 'GABY02', 'GABY03', 'GABY04', 'GABY05', 
+    'GABY06', 'GABY07', 'GABY08', 'GABY09', 'GABY10', 
+    'GABY11', 'GABY12', 'GABY13', 'GABY14', 'GABY15'
+];
 
 // ============ ARMAZENAMENTO EM MEMÓRIA ============
 let conversations = new Map();
@@ -35,53 +40,107 @@ let webhookLocks = new Map();
 let logs = [];
 let funis = new Map();
 let lastSuccessfulInstanceIndex = -1;
+let phraseTriggers = new Map();
+let phraseCooldowns = new Map();
+let manualTriggers = new Map();
 
-// 🆕 NOVO: Sistema de frases-chave
-let phraseTriggers = new Map(); // Armazena frases e funis associados
-let phraseCooldowns = new Map(); // Controla cooldown de 24h por telefone+frase
+const LOG_LEVELS = {
+    DEBUG: 'DEBUG',
+    INFO: 'INFO',
+    WARNING: 'WARNING',
+    ERROR: 'ERROR',
+    CRITICAL: 'CRITICAL'
+};
 
 // ============ FUNIS PADRÃO ============
 const defaultFunnels = {
-    'CS_APROVADA': {
-        id: 'CS_APROVADA',
-        name: 'CS - Compra Aprovada',
-        steps: []
-    },
-    'CS_PIX': {
-        id: 'CS_PIX',
-        name: 'CS - PIX Pendente',
-        steps: []
-    },
-    'FB_APROVADA': {
-        id: 'FB_APROVADA',
-        name: 'FB - Compra Aprovada',
-        steps: []
-    },
-    'FB_PIX': {
-        id: 'FB_PIX',
-        name: 'FB - PIX Pendente',
-        steps: []
-    }
+    'CS_APROVADA': { id: 'CS_APROVADA', name: 'CS - Compra Aprovada', steps: [] },
+    'CS_PIX': { id: 'CS_PIX', name: 'CS - PIX Pendente', steps: [] },
+    'FB_APROVADA': { id: 'FB_APROVADA', name: 'FB - Compra Aprovada', steps: [] },
+    'FB_PIX': { id: 'FB_PIX', name: 'FB - PIX Pendente', steps: [] }
 };
 
-// ============ SISTEMA DE LOCK SIMPLIFICADO (APENAS WEBHOOK) ============
+// ============ SISTEMA DE LOGS MELHORADO ============
+function addLog(type, message, data = null, level = LOG_LEVELS.INFO) {
+    const log = {
+        id: Date.now() + Math.random(),
+        timestamp: new Date().toISOString(),
+        type,
+        level,
+        message,
+        data: data ? JSON.stringify(data) : null,
+        stack: level === LOG_LEVELS.ERROR || level === LOG_LEVELS.CRITICAL ? new Error().stack : null
+    };
+    
+    logs.unshift(log);
+    if (logs.length > 5000) logs = logs.slice(0, 5000);
+    
+    const emoji = {
+        [LOG_LEVELS.DEBUG]: '🔍',
+        [LOG_LEVELS.INFO]: 'ℹ️',
+        [LOG_LEVELS.WARNING]: '⚠️',
+        [LOG_LEVELS.ERROR]: '❌',
+        [LOG_LEVELS.CRITICAL]: '🔥'
+    };
+    
+    console.log(`[${log.timestamp}] ${emoji[level] || ''} ${type}: ${message}`);
+    if (data) console.log('  Data:', data);
+}
+
+async function saveLogsToFile() {
+    try {
+        await ensureDataDir();
+        const recentLogs = logs.slice(0, 1000);
+        await fs.writeFile(LOGS_FILE, JSON.stringify(recentLogs, null, 2));
+    } catch (error) {
+        console.error('Erro ao salvar logs:', error.message);
+    }
+}
+
+async function loadLogsFromFile() {
+    try {
+        const data = await fs.readFile(LOGS_FILE, 'utf8');
+        logs = JSON.parse(data);
+        addLog('LOGS_LOADED', `Logs carregados: ${logs.length}`, null, LOG_LEVELS.INFO);
+    } catch (error) {
+        addLog('LOGS_LOAD_ERROR', 'Sem logs anteriores', null, LOG_LEVELS.DEBUG);
+    }
+}
+
+// ============ SISTEMA DE LOCK COM VALIDAÇÕES ============
 async function acquireWebhookLock(phoneKey, timeout = 10000) {
     const startTime = Date.now();
+    let attempts = 0;
+    
     while (webhookLocks.get(phoneKey)) {
+        attempts++;
         if (Date.now() - startTime > timeout) {
-            addLog('WEBHOOK_LOCK_TIMEOUT', `Timeout esperando lock webhook para ${phoneKey}`);
+            addLog('WEBHOOK_LOCK_TIMEOUT', `Timeout após ${attempts} tentativas`, 
+                { phoneKey, waitTime: timeout }, LOG_LEVELS.WARNING);
             return false;
         }
         await new Promise(resolve => setTimeout(resolve, 100));
     }
-    webhookLocks.set(phoneKey, true);
-    addLog('WEBHOOK_LOCK_ACQUIRED', `Lock webhook adquirido para ${phoneKey}`);
+    
+    webhookLocks.set(phoneKey, { 
+        acquired: Date.now(), 
+        stack: new Error().stack 
+    });
+    
+    addLog('WEBHOOK_LOCK_ACQUIRED', `Lock adquirido (tentativas: ${attempts})`, 
+        { phoneKey }, LOG_LEVELS.DEBUG);
     return true;
 }
 
 function releaseWebhookLock(phoneKey) {
+    const lock = webhookLocks.get(phoneKey);
     webhookLocks.delete(phoneKey);
-    addLog('WEBHOOK_LOCK_RELEASED', `Lock webhook liberado para ${phoneKey}`);
+    
+    if (lock) {
+        const duration = Date.now() - lock.acquired;
+        addLog('WEBHOOK_LOCK_RELEASED', `Lock liberado após ${duration}ms`, 
+            { phoneKey, duration }, LOG_LEVELS.DEBUG);
+    }
 }
 
 // ============ PERSISTÊNCIA DE DADOS ============
@@ -98,9 +157,9 @@ async function saveFunnelsToFile() {
         await ensureDataDir();
         const funnelsArray = Array.from(funis.values());
         await fs.writeFile(DATA_FILE, JSON.stringify(funnelsArray, null, 2));
-        addLog('DATA_SAVE', 'Funis salvos: ' + funnelsArray.length);
+        addLog('DATA_SAVE', `Funis salvos: ${funnelsArray.length}`, null, LOG_LEVELS.DEBUG);
     } catch (error) {
-        addLog('DATA_SAVE_ERROR', 'Erro ao salvar funis: ' + error.message);
+        addLog('DATA_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
     }
 }
 
@@ -114,15 +173,14 @@ async function loadFunnelsFromFile() {
                 funis.set(funnel.id, funnel);
             }
         });
-        addLog('DATA_LOAD', 'Funis carregados: ' + funis.size);
+        addLog('DATA_LOAD', `Funis carregados: ${funis.size}`, null, LOG_LEVELS.INFO);
         return true;
     } catch (error) {
-        addLog('DATA_LOAD_ERROR', 'Usando funis padrão');
+        addLog('DATA_LOAD_ERROR', 'Usando funis padrão', null, LOG_LEVELS.WARNING);
         return false;
     }
 }
 
-// 🆕 NOVO: Persistência de frases-chave
 async function savePhrasesToFile() {
     try {
         await ensureDataDir();
@@ -133,9 +191,9 @@ async function savePhrasesToFile() {
             triggerCount: data.triggerCount
         }));
         await fs.writeFile(PHRASES_FILE, JSON.stringify(phrasesArray, null, 2));
-        addLog('PHRASES_SAVE', 'Frases salvas: ' + phrasesArray.length);
+        addLog('PHRASES_SAVE', `Frases salvas: ${phrasesArray.length}`, null, LOG_LEVELS.DEBUG);
     } catch (error) {
-        addLog('PHRASES_SAVE_ERROR', 'Erro ao salvar frases: ' + error.message);
+        addLog('PHRASES_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
     }
 }
 
@@ -151,10 +209,46 @@ async function loadPhrasesFromFile() {
                 triggerCount: item.triggerCount || 0
             });
         });
-        addLog('PHRASES_LOAD', 'Frases carregadas: ' + phraseTriggers.size);
+        addLog('PHRASES_LOAD', `Frases carregadas: ${phraseTriggers.size}`, null, LOG_LEVELS.INFO);
         return true;
     } catch (error) {
-        addLog('PHRASES_LOAD_ERROR', 'Nenhuma frase cadastrada');
+        addLog('PHRASES_LOAD_ERROR', 'Nenhuma frase cadastrada', null, LOG_LEVELS.DEBUG);
+        return false;
+    }
+}
+
+async function saveManualTriggersToFile() {
+    try {
+        await ensureDataDir();
+        const triggersArray = Array.from(manualTriggers.entries()).map(([phrase, data]) => ({
+            phrase,
+            funnelId: data.funnelId,
+            active: data.active,
+            triggerCount: data.triggerCount
+        }));
+        await fs.writeFile(MANUAL_TRIGGERS_FILE, JSON.stringify(triggersArray, null, 2));
+        addLog('MANUAL_TRIGGERS_SAVE', `Frases manuais salvas: ${triggersArray.length}`, null, LOG_LEVELS.DEBUG);
+    } catch (error) {
+        addLog('MANUAL_TRIGGERS_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
+    }
+}
+
+async function loadManualTriggersFromFile() {
+    try {
+        const data = await fs.readFile(MANUAL_TRIGGERS_FILE, 'utf8');
+        const triggersArray = JSON.parse(data);
+        manualTriggers.clear();
+        triggersArray.forEach(item => {
+            manualTriggers.set(item.phrase, {
+                funnelId: item.funnelId,
+                active: item.active !== false,
+                triggerCount: item.triggerCount || 0
+            });
+        });
+        addLog('MANUAL_TRIGGERS_LOAD', `Frases manuais carregadas: ${manualTriggers.size}`, null, LOG_LEVELS.INFO);
+        return true;
+    } catch (error) {
+        addLog('MANUAL_TRIGGERS_LOAD_ERROR', 'Nenhuma frase manual cadastrada', null, LOG_LEVELS.DEBUG);
         return false;
     }
 }
@@ -178,9 +272,9 @@ async function saveConversationsToFile() {
             stickyInstances: Array.from(stickyInstances.entries())
         }, null, 2));
         
-        addLog('DATA_SAVE', 'Conversas salvas: ' + conversationsArray.length);
+        addLog('DATA_SAVE', `Conversas salvas: ${conversationsArray.length}`, null, LOG_LEVELS.DEBUG);
     } catch (error) {
-        addLog('DATA_SAVE_ERROR', 'Erro ao salvar conversas: ' + error.message);
+        addLog('DATA_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
     }
 }
 
@@ -203,10 +297,10 @@ async function loadConversationsFromFile() {
         parsed.phoneIndex.forEach(([key, value]) => phoneIndex.set(key, value));
         stickyInstances.clear();
         parsed.stickyInstances.forEach(([key, value]) => stickyInstances.set(key, value));
-        addLog('DATA_LOAD', 'Conversas carregadas: ' + parsed.conversations.length);
+        addLog('DATA_LOAD', `Conversas carregadas: ${parsed.conversations.length}`, null, LOG_LEVELS.INFO);
         return true;
     } catch (error) {
-        addLog('DATA_LOAD_ERROR', 'Nenhuma conversa anterior');
+        addLog('DATA_LOAD_ERROR', 'Nenhuma conversa anterior', null, LOG_LEVELS.DEBUG);
         return false;
     }
 }
@@ -214,16 +308,16 @@ async function loadConversationsFromFile() {
 setInterval(async () => {
     await saveFunnelsToFile();
     await saveConversationsToFile();
-    await savePhrasesToFile(); // 🆕 NOVO: Salvar frases também
+    await savePhrasesToFile();
+    await saveManualTriggersToFile();
+    await saveLogsToFile();
 }, 30000);
 
 Object.values(defaultFunnels).forEach(funnel => funis.set(funnel.id, funnel));
 
-// ============ MIDDLEWARES ============
 app.use(express.json());
 app.use(express.static('public'));
 
-// ============ FUNÇÕES AUXILIARES ============
 function extractPhoneKey(phone) {
     if (!phone) return '';
     const cleaned = phone.replace(/\D/g, '');
@@ -275,49 +369,60 @@ function extractMessageText(message) {
     return '[MENSAGEM]';
 }
 
-function addLog(type, message, data = null) {
-    const log = {
-        id: Date.now() + Math.random(),
-        timestamp: new Date(),
-        type,
-        message,
-        data
-    };
-    logs.unshift(log);
-    if (logs.length > 1000) logs = logs.slice(0, 1000);
-    console.log('[' + log.timestamp.toISOString() + '] ' + type + ': ' + message);
+function validateConversationState(conversation, phoneKey) {
+    const issues = [];
+    
+    if (!conversation.funnelId) {
+        issues.push('Sem funnelId');
+    }
+    
+    if (conversation.stepIndex < 0 && !conversation.pixWaiting) {
+        issues.push('StepIndex negativo sem PIX waiting');
+    }
+    
+    const funnel = funis.get(conversation.funnelId);
+    if (!funnel) {
+        issues.push('Funil não encontrado: ' + conversation.funnelId);
+    } else if (conversation.stepIndex >= funnel.steps.length) {
+        issues.push('StepIndex maior que steps do funil');
+    }
+    
+    if (issues.length > 0) {
+        addLog('CONVERSATION_VALIDATION_FAILED', issues.join(', '), 
+            { phoneKey, conversation }, LOG_LEVELS.ERROR);
+        return false;
+    }
+    
+    return true;
 }
 
-// 🆕 NOVO: Função para detectar frase-chave
 function checkPhraseTrigger(phoneKey, messageText) {
     const normalizedMessage = messageText.toLowerCase().trim();
     
-    addLog('PHRASE_CHECK_START', `Normalizando mensagem: "${normalizedMessage}"`, { phoneKey });
+    addLog('PHRASE_CHECK_START', `Mensagem normalizada: "${normalizedMessage}"`, 
+        { phoneKey, original: messageText }, LOG_LEVELS.DEBUG);
     
     for (const [phrase, data] of phraseTriggers.entries()) {
         if (!data.active) {
-            addLog('PHRASE_SKIP_INACTIVE', `Frase inativa: "${phrase}"`, { phoneKey });
             continue;
         }
         
         const normalizedPhrase = phrase.toLowerCase().trim();
         
-        addLog('PHRASE_COMPARING', `Comparando "${normalizedMessage}" com "${normalizedPhrase}"`, { phoneKey, match: normalizedMessage === normalizedPhrase });
-        
-        if (normalizedMessage === normalizedPhrase) {
-            // Verificar cooldown
+        if (normalizedMessage.includes(normalizedPhrase)) {
             const cooldownKey = `${phoneKey}:${phrase}`;
             const lastTrigger = phraseCooldowns.get(cooldownKey);
             
             if (lastTrigger && (Date.now() - lastTrigger) < PHRASE_COOLDOWN) {
-                addLog('PHRASE_COOLDOWN', `Cooldown ativo para "${phrase}"`, { phoneKey });
+                const remainingTime = Math.ceil((PHRASE_COOLDOWN - (Date.now() - lastTrigger)) / (60 * 60 * 1000));
+                addLog('PHRASE_COOLDOWN', `Cooldown ativo (${remainingTime}h restantes)`, 
+                    { phoneKey, phrase }, LOG_LEVELS.WARNING);
                 return null;
             }
             
-            // Frase detectada!
-            addLog('PHRASE_TRIGGERED', `Frase detectada: "${phrase}"`, { phoneKey, funnelId: data.funnelId });
+            addLog('PHRASE_TRIGGERED', `Frase detectada: "${phrase}"`, 
+                { phoneKey, funnelId: data.funnelId, messageReceived: normalizedMessage }, LOG_LEVELS.INFO);
             
-            // Atualizar cooldown e contador
             phraseCooldowns.set(cooldownKey, Date.now());
             data.triggerCount = (data.triggerCount || 0) + 1;
             phraseTriggers.set(phrase, data);
@@ -327,13 +432,47 @@ function checkPhraseTrigger(phoneKey, messageText) {
         }
     }
     
-    addLog('PHRASE_NOT_FOUND', `Nenhuma frase correspondente para: "${normalizedMessage}"`, { phoneKey });
+    addLog('PHRASE_NOT_FOUND', `Nenhuma frase correspondente`, 
+        { phoneKey, message: normalizedMessage }, LOG_LEVELS.DEBUG);
     return null;
 }
 
-// ============ EVOLUTION API ============
+function checkManualTrigger(messageText) {
+    const normalizedMessage = messageText.toLowerCase().trim();
+    
+    addLog('MANUAL_TRIGGER_CHECK', `Verificando frase manual: "${normalizedMessage}"`, 
+        { original: messageText }, LOG_LEVELS.DEBUG);
+    
+    for (const [phrase, data] of manualTriggers.entries()) {
+        if (!data.active) {
+            continue;
+        }
+        
+        const normalizedPhrase = phrase.toLowerCase().trim();
+        
+        if (normalizedMessage.includes(normalizedPhrase)) {
+            addLog('MANUAL_TRIGGER_DETECTED', `Frase manual detectada: "${phrase}"`, 
+                { funnelId: data.funnelId }, LOG_LEVELS.INFO);
+            
+            data.triggerCount = (data.triggerCount || 0) + 1;
+            manualTriggers.set(phrase, data);
+            saveManualTriggersToFile();
+            
+            return data.funnelId;
+        }
+    }
+    
+    addLog('MANUAL_TRIGGER_NOT_FOUND', `Nenhuma frase manual correspondente`, 
+        { message: normalizedMessage }, LOG_LEVELS.DEBUG);
+    return null;
+}
+
 async function sendToEvolution(instanceName, endpoint, payload) {
     const url = EVOLUTION_BASE_URL + endpoint + '/' + instanceName;
+    
+    addLog('EVOLUTION_REQUEST', `${endpoint} via ${instanceName}`, 
+        { url, payload }, LOG_LEVELS.DEBUG);
+    
     try {
         const response = await axios.post(url, payload, {
             headers: {
@@ -342,8 +481,16 @@ async function sendToEvolution(instanceName, endpoint, payload) {
             },
             timeout: 15000
         });
+        
+        addLog('EVOLUTION_RESPONSE_OK', `Status ${response.status}`, 
+            { instanceName, endpoint }, LOG_LEVELS.DEBUG);
+        
         return { ok: true, data: response.data };
     } catch (error) {
+        addLog('EVOLUTION_REQUEST_FAILED', error.message, 
+            { instanceName, endpoint, status: error.response?.status, 
+              errorData: error.response?.data }, LOG_LEVELS.ERROR);
+        
         return { 
             ok: false, 
             error: error.response?.data || error.message,
@@ -379,26 +526,33 @@ async function sendVideo(remoteJid, videoUrl, caption, instanceName) {
 
 async function sendAudio(remoteJid, audioUrl, instanceName) {
     try {
-        addLog('AUDIO_DOWNLOAD_START', `Baixando áudio de ${audioUrl}`);
+        addLog('AUDIO_DOWNLOAD_START', `Baixando de ${audioUrl}`, null, LOG_LEVELS.DEBUG);
+        
         const audioResponse = await axios.get(audioUrl, {
             responseType: 'arraybuffer',
             timeout: 30000,
             headers: { 'User-Agent': 'Mozilla/5.0' }
         });
+        
         const base64Audio = Buffer.from(audioResponse.data, 'binary').toString('base64');
         const audioBase64 = `data:audio/mpeg;base64,${base64Audio}`;
-        addLog('AUDIO_CONVERTED', `Áudio convertido para base64 (${Math.round(base64Audio.length / 1024)}KB)`);
+        
+        addLog('AUDIO_CONVERTED', `Base64 criado (${Math.round(base64Audio.length / 1024)}KB)`, 
+            null, LOG_LEVELS.DEBUG);
+        
         const result = await sendToEvolution(instanceName, '/message/sendWhatsAppAudio', {
             number: remoteJid.replace('@s.whatsapp.net', ''),
             audio: audioBase64,
             delay: 1200,
             encoding: true
         });
+        
         if (result.ok) {
-            addLog('AUDIO_SENT_PTT', `Áudio enviado como PTT com sucesso`);
+            addLog('AUDIO_SENT_PTT', 'Áudio enviado como PTT', null, LOG_LEVELS.DEBUG);
             return result;
         }
-        addLog('AUDIO_FALLBACK_MEDIA', `Tentando formato alternativo`);
+        
+        addLog('AUDIO_FALLBACK_MEDIA', 'Tentando formato alternativo', null, LOG_LEVELS.WARNING);
         return await sendToEvolution(instanceName, '/message/sendMedia', {
             number: remoteJid.replace('@s.whatsapp.net', ''),
             mediatype: 'audio',
@@ -406,8 +560,9 @@ async function sendAudio(remoteJid, audioUrl, instanceName) {
             mimetype: 'audio/mpeg'
         });
     } catch (error) {
-        addLog('AUDIO_ERROR', `Erro ao processar áudio: ${error.message}`);
-        addLog('AUDIO_FALLBACK_URL', `Usando fallback com URL direta`);
+        addLog('AUDIO_ERROR', error.message, { audioUrl }, LOG_LEVELS.ERROR);
+        addLog('AUDIO_FALLBACK_URL', 'Usando URL direta', null, LOG_LEVELS.WARNING);
+        
         return await sendToEvolution(instanceName, '/message/sendWhatsAppAudio', {
             number: remoteJid.replace('@s.whatsapp.net', ''),
             audio: audioUrl,
@@ -416,20 +571,19 @@ async function sendAudio(remoteJid, audioUrl, instanceName) {
     }
 }
 
-// ============ ENVIO COM RETRY ============
 async function sendWithFallback(phoneKey, remoteJid, type, text, mediaUrl, isFirstMessage = false) {
     let instancesToTry = [...INSTANCES];
     const stickyInstance = stickyInstances.get(phoneKey);
     
-    // 🆕 CORREÇÃO: Se já tem sticky instance, SEMPRE usa ela primeiro (mesmo em primeira mensagem)
     if (stickyInstance) {
         instancesToTry = [stickyInstance, ...INSTANCES.filter(i => i !== stickyInstance)];
-        addLog('SEND_USING_STICKY', `Usando sticky instance: ${stickyInstance}`, { phoneKey, isFirstMessage });
+        addLog('SEND_USING_STICKY', `Sticky instance: ${stickyInstance}`, 
+            { phoneKey, isFirstMessage }, LOG_LEVELS.DEBUG);
     } else if (isFirstMessage) {
-        // Só faz rodízio se NÃO tiver sticky instance
         const nextIndex = (lastSuccessfulInstanceIndex + 1) % INSTANCES.length;
         instancesToTry = [...INSTANCES.slice(nextIndex), ...INSTANCES.slice(0, nextIndex)];
-        addLog('SEND_USING_ROTATION', `Usando rodízio, próxima: ${instancesToTry[0]}`, { phoneKey });
+        addLog('SEND_USING_ROTATION', `Próxima: ${instancesToTry[0]}`, 
+            { phoneKey, nextIndex }, LOG_LEVELS.DEBUG);
     }
     
     let lastError = null;
@@ -440,27 +594,40 @@ async function sendWithFallback(phoneKey, remoteJid, type, text, mediaUrl, isFir
             try {
                 let result;
                 
-                if (type === 'text') result = await sendText(remoteJid, text, instanceName);
-                else if (type === 'image') result = await sendImage(remoteJid, mediaUrl, text || '', instanceName);
-                else if (type === 'video') result = await sendVideo(remoteJid, mediaUrl, text || '', instanceName);
-                else if (type === 'audio') result = await sendAudio(remoteJid, mediaUrl, instanceName);
+                if (type === 'text') {
+                    result = await sendText(remoteJid, text, instanceName);
+                } else if (type === 'image') {
+                    result = await sendImage(remoteJid, mediaUrl, text || '', instanceName);
+                } else if (type === 'video') {
+                    result = await sendVideo(remoteJid, mediaUrl, text || '', instanceName);
+                } else if (type === 'audio') {
+                    result = await sendAudio(remoteJid, mediaUrl, instanceName);
+                }
                 
                 if (result && result.ok) {
                     stickyInstances.set(phoneKey, instanceName);
                     if (isFirstMessage && !stickyInstance) {
-                        // Só atualiza o índice se for rodízio (não tinha sticky)
                         lastSuccessfulInstanceIndex = INSTANCES.indexOf(instanceName);
                     }
-                    addLog('SEND_SUCCESS', `Mensagem enviada via ${instanceName}`, { phoneKey, type });
+                    
+                    addLog('SEND_SUCCESS', `Mensagem ${type} enviada`, 
+                        { phoneKey, instanceName, attempt }, LOG_LEVELS.INFO);
+                    
                     return { success: true, instanceName };
                 }
                 
                 lastError = result.error;
+                addLog('SEND_ATTEMPT_FAILED', `Tentativa ${attempt}/${maxAttempts}`, 
+                    { phoneKey, instanceName, error: lastError }, LOG_LEVELS.WARNING);
+                
                 if (attempt < maxAttempts) {
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
             } catch (error) {
                 lastError = error.message;
+                addLog('SEND_EXCEPTION', error.message, 
+                    { phoneKey, instanceName, attempt, stack: error.stack }, LOG_LEVELS.ERROR);
+                
                 if (attempt < maxAttempts) {
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
@@ -468,7 +635,8 @@ async function sendWithFallback(phoneKey, remoteJid, type, text, mediaUrl, isFir
         }
     }
     
-    addLog('SEND_ALL_FAILED', `Falha total no envio para ${phoneKey}`, { lastError });
+    addLog('SEND_ALL_FAILED', 'Todas instâncias falharam', 
+        { phoneKey, lastError, triedInstances: instancesToTry.length }, LOG_LEVELS.CRITICAL);
     
     const conversation = conversations.get(phoneKey);
     if (conversation) {
@@ -479,8 +647,6 @@ async function sendWithFallback(phoneKey, remoteJid, type, text, mediaUrl, isFir
     
     return { success: false, error: lastError };
 }
-
-// ============ ORQUESTRAÇÃO - SEM LOCKS INTERNOS ============
 
 async function createPixWaitingConversation(phoneKey, remoteJid, orderCode, customerName, productType, amount) {
     const funnelId = productType === 'CS' ? 'CS_PIX' : 'FB_PIX';
@@ -501,16 +667,19 @@ async function createPixWaitingConversation(phoneKey, remoteJid, orderCode, cust
         lastReply: null,
         canceled: false,
         completed: false,
-        source: 'kirvano' // 🆕 NOVO: identificar origem
+        source: 'kirvano'
     };
     
     conversations.set(phoneKey, conversation);
-    addLog('PIX_WAITING_CREATED', `PIX em espera para ${phoneKey}`, { orderCode, productType });
+    addLog('PIX_WAITING_CREATED', `PIX em espera`, 
+        { phoneKey, orderCode, productType }, LOG_LEVELS.INFO);
     
     const timeout = setTimeout(async () => {
         const conv = conversations.get(phoneKey);
         if (conv && conv.orderCode === orderCode && !conv.canceled && conv.pixWaiting) {
-            addLog('PIX_TIMEOUT_TRIGGERED', `Timeout PIX disparado para ${phoneKey}`, { orderCode });
+            addLog('PIX_TIMEOUT_TRIGGERED', 'Timeout disparado', 
+                { phoneKey, orderCode }, LOG_LEVELS.INFO);
+            
             conv.pixWaiting = false;
             conv.stepIndex = 0;
             conversations.set(phoneKey, conv);
@@ -536,16 +705,19 @@ async function transferPixToApproved(phoneKey, remoteJid, orderCode, customerNam
     if (pixTimeout) {
         clearTimeout(pixTimeout.timeout);
         pixTimeouts.delete(phoneKey);
-        addLog('PIX_TIMEOUT_CANCELED', `Timeout cancelado para ${phoneKey}`, { orderCode });
+        addLog('PIX_TIMEOUT_CANCELED', 'Timeout cancelado', 
+            { phoneKey, orderCode }, LOG_LEVELS.INFO);
     }
     
     let startingStep = 0;
     
     if (pixConv && pixConv.stepIndex >= 0) {
         startingStep = 3;
-        addLog('TRANSFER_SKIP_SIMILAR', `Cliente já interagiu, começando passo 3`, { phoneKey });
+        addLog('TRANSFER_SKIP_SIMILAR', 'Cliente interagiu, começando passo 3', 
+            { phoneKey }, LOG_LEVELS.INFO);
     } else {
-        addLog('TRANSFER_FROM_BEGINNING', `Cliente não interagiu, começando passo 0`, { phoneKey });
+        addLog('TRANSFER_FROM_BEGINNING', 'Cliente não interagiu, começando do início', 
+            { phoneKey }, LOG_LEVELS.INFO);
     }
     
     const funnelId = productType === 'CS' ? 'CS_APROVADA' : 'FB_APROVADA';
@@ -567,11 +739,12 @@ async function transferPixToApproved(phoneKey, remoteJid, orderCode, customerNam
         completed: false,
         transferredFromPix: true,
         previousFunnel: productType === 'CS' ? 'CS_PIX' : 'FB_PIX',
-        source: 'kirvano' // 🆕 NOVO: identificar origem
+        source: 'kirvano'
     };
     
     conversations.set(phoneKey, approvedConv);
-    addLog('TRANSFER_PIX_TO_APPROVED', `Transferido para APROVADA`, { phoneKey, startingStep, productType });
+    addLog('TRANSFER_PIX_TO_APPROVED', 'Transferido para funil aprovado', 
+        { phoneKey, startingStep, productType }, LOG_LEVELS.INFO);
     
     await sendStep(phoneKey);
 }
@@ -592,61 +765,92 @@ async function startFunnel(phoneKey, remoteJid, funnelId, orderCode, customerNam
         lastReply: null,
         canceled: false,
         completed: false,
-        source // 🆕 NOVO: identificar origem (kirvano ou phrase)
+        source
     };
     
     conversations.set(phoneKey, conversation);
-    addLog('FUNNEL_START', `Iniciando ${funnelId} para ${phoneKey}`, { orderCode, source });
+    addLog('FUNNEL_START', `Iniciando funil ${funnelId}`, 
+        { phoneKey, orderCode, source }, LOG_LEVELS.INFO);
+    
     await sendStep(phoneKey);
 }
 
 async function sendStep(phoneKey) {
     const conversation = conversations.get(phoneKey);
-    if (!conversation) return;
+    
+    if (!conversation) {
+        addLog('STEP_NO_CONVERSATION', 'Conversa não encontrada', 
+            { phoneKey }, LOG_LEVELS.ERROR);
+        return;
+    }
+    
+    if (!validateConversationState(conversation, phoneKey)) {
+        addLog('STEP_INVALID_STATE', 'Estado inválido detectado', 
+            { phoneKey, conversation }, LOG_LEVELS.ERROR);
+        return;
+    }
     
     if (conversation.canceled) {
-        addLog('STEP_CANCELED', `Conversa cancelada`, { phoneKey });
+        addLog('STEP_CANCELED', 'Conversa cancelada', 
+            { phoneKey }, LOG_LEVELS.WARNING);
         return;
     }
     
     if (conversation.pixWaiting) {
-        addLog('STEP_PIX_WAITING', `Aguardando timeout PIX`, { phoneKey });
+        addLog('STEP_PIX_WAITING', 'Aguardando timeout PIX', 
+            { phoneKey }, LOG_LEVELS.DEBUG);
         return;
     }
     
     const funnel = funis.get(conversation.funnelId);
-    if (!funnel) return;
+    if (!funnel) {
+        addLog('STEP_FUNNEL_NOT_FOUND', `Funil ${conversation.funnelId} não existe`, 
+            { phoneKey }, LOG_LEVELS.ERROR);
+        return;
+    }
     
     const step = funnel.steps[conversation.stepIndex];
-    if (!step) return;
+    if (!step) {
+        addLog('STEP_NOT_FOUND', `Passo ${conversation.stepIndex} não existe`, 
+            { phoneKey, totalSteps: funnel.steps.length }, LOG_LEVELS.ERROR);
+        return;
+    }
     
     const isFirstMessage = conversation.stepIndex === 0 && !conversation.lastSystemMessage;
     
-    addLog('STEP_SEND_START', `Enviando passo ${conversation.stepIndex}`, { 
-        phoneKey,
-        funnelId: conversation.funnelId,
-        stepType: step.type
-    });
+    addLog('STEP_SEND_START', `Enviando passo ${conversation.stepIndex}/${funnel.steps.length - 1}`, 
+        { phoneKey, funnelId: conversation.funnelId, stepType: step.type, 
+          waitForReply: step.waitForReply }, LOG_LEVELS.INFO);
     
     let result = { success: true };
     
     if (step.delayBefore && step.delayBefore > 0) {
         const delaySeconds = parseInt(step.delayBefore);
-        addLog('STEP_DELAY_BEFORE', `Aguardando ${delaySeconds}s antes de enviar`, { phoneKey });
+        addLog('STEP_DELAY_BEFORE', `Aguardando ${delaySeconds}s`, 
+            { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
     }
     
     if (step.showTyping && step.type !== 'delay') {
-        addLog('STEP_SHOW_TYPING', `Mostrando "digitando..." por 3s`, { phoneKey });
+        addLog('STEP_SHOW_TYPING', 'Mostrando digitando por 3s', 
+            { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, 3000));
     }
     
     if (step.type === 'delay') {
         const delaySeconds = step.delaySeconds || 10;
-        addLog('STEP_DELAY', `Delay de ${delaySeconds}s`, { phoneKey });
+        addLog('STEP_DELAY', `Delay de ${delaySeconds}s`, 
+            { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
     } else {
-        result = await sendWithFallback(phoneKey, conversation.remoteJid, step.type, step.text, step.mediaUrl, isFirstMessage);
+        result = await sendWithFallback(
+            phoneKey, 
+            conversation.remoteJid, 
+            step.type, 
+            step.text, 
+            step.mediaUrl, 
+            isFirstMessage
+        );
     }
     
     if (result.success) {
@@ -655,33 +859,52 @@ async function sendStep(phoneKey) {
         if (step.waitForReply && step.type !== 'delay') {
             conversation.waiting_for_response = true;
             conversations.set(phoneKey, conversation);
-            addLog('STEP_WAITING_REPLY', `Aguardando resposta passo ${conversation.stepIndex}`, { phoneKey });
+            
+            addLog('STEP_WAITING_REPLY', `Aguardando resposta do cliente`, 
+                { phoneKey, stepIndex: conversation.stepIndex }, LOG_LEVELS.INFO);
         } else {
             conversations.set(phoneKey, conversation);
-            addLog('STEP_AUTO_ADVANCE', `Avançando automaticamente passo ${conversation.stepIndex}`, { phoneKey });
+            
+            addLog('STEP_AUTO_ADVANCE', 'Avançando automaticamente', 
+                { phoneKey, currentStep: conversation.stepIndex }, LOG_LEVELS.DEBUG);
+            
             await advanceConversation(phoneKey, null, 'auto');
         }
     } else {
-        addLog('STEP_FAILED', `Falha no envio`, { phoneKey, error: result.error });
+        addLog('STEP_FAILED', 'Falha no envio', 
+            { phoneKey, error: result.error, stepIndex: conversation.stepIndex }, 
+            LOG_LEVELS.ERROR);
     }
 }
 
 async function advanceConversation(phoneKey, replyText, reason) {
     const conversation = conversations.get(phoneKey);
-    if (!conversation) return;
+    
+    if (!conversation) {
+        addLog('ADVANCE_NO_CONVERSATION', 'Conversa não encontrada', 
+            { phoneKey }, LOG_LEVELS.ERROR);
+        return;
+    }
     
     if (conversation.canceled) {
-        addLog('ADVANCE_CANCELED', `Conversa cancelada`, { phoneKey });
+        addLog('ADVANCE_CANCELED', 'Conversa foi cancelada', 
+            { phoneKey }, LOG_LEVELS.WARNING);
         return;
     }
     
     const funnel = funis.get(conversation.funnelId);
-    if (!funnel) return;
+    if (!funnel) {
+        addLog('ADVANCE_FUNNEL_NOT_FOUND', `Funil ${conversation.funnelId} não existe`, 
+            { phoneKey }, LOG_LEVELS.ERROR);
+        return;
+    }
     
     const nextStepIndex = conversation.stepIndex + 1;
     
     if (nextStepIndex >= funnel.steps.length) {
-        addLog('FUNNEL_END', `Funil ${conversation.funnelId} concluído`, { phoneKey });
+        addLog('FUNNEL_END', `Funil ${conversation.funnelId} concluído`, 
+            { phoneKey, totalSteps: funnel.steps.length }, LOG_LEVELS.INFO);
+        
         conversation.waiting_for_response = false;
         conversation.completed = true;
         conversation.completedAt = new Date();
@@ -689,6 +912,7 @@ async function advanceConversation(phoneKey, replyText, reason) {
         return;
     }
     
+    const previousStep = conversation.stepIndex;
     conversation.stepIndex = nextStepIndex;
     conversation.waiting_for_response = false;
     
@@ -697,15 +921,22 @@ async function advanceConversation(phoneKey, replyText, reason) {
     }
     
     conversations.set(phoneKey, conversation);
-    addLog('STEP_ADVANCE', `Avançando para passo ${nextStepIndex}`, { phoneKey, reason });
+    
+    addLog('STEP_ADVANCE', `${previousStep} → ${nextStepIndex}`, 
+        { phoneKey, reason, totalSteps: funnel.steps.length }, LOG_LEVELS.INFO);
     
     await sendStep(phoneKey);
 }
 
-// ============ WEBHOOKS ============
 app.post('/webhook/kirvano', async (req, res) => {
+    const requestId = Date.now() + Math.random();
+    
     try {
         const data = req.body;
+        
+        addLog('KIRVANO_WEBHOOK_RECEIVED', 'Webhook Kirvano recebido', 
+            { requestId, body: data }, LOG_LEVELS.INFO);
+        
         const event = String(data.event || '').toUpperCase();
         const status = String(data.status || data.payment_status || '').toUpperCase();
         const method = String(data.payment?.method || data.payment_method || '').toUpperCase();
@@ -717,7 +948,10 @@ app.post('/webhook/kirvano', async (req, res) => {
         const totalPrice = data.total_price || 'R$ 0,00';
         
         const phoneKey = extractPhoneKey(customerPhone);
+        
         if (!phoneKey || phoneKey.length !== 8) {
+            addLog('KIRVANO_INVALID_PHONE', 'Telefone inválido', 
+                { requestId, phone: customerPhone }, LOG_LEVELS.WARNING);
             return res.json({ success: false, message: 'Telefone inválido' });
         }
         
@@ -734,7 +968,8 @@ app.post('/webhook/kirvano', async (req, res) => {
             }
         }
         
-        addLog('KIRVANO_EVENT', `${event} - ${customerName}`, { orderCode, phoneKey, method, productType });
+        addLog('KIRVANO_EVENT', `${event} - ${customerName}`, 
+            { requestId, orderCode, phoneKey, method, productType }, LOG_LEVELS.INFO);
         
         const isApproved = event.includes('APPROVED') || event.includes('PAID') || status === 'APPROVED';
         const isPix = method.includes('PIX') || event.includes('PIX');
@@ -744,77 +979,128 @@ app.post('/webhook/kirvano', async (req, res) => {
             const isPixFunnel = existingConv && (existingConv.funnelId === 'CS_PIX' || existingConv.funnelId === 'FB_PIX');
             
             if (isPixFunnel) {
-                addLog('KIRVANO_PIX_TO_APPROVED', `Cliente pagou PIX`, { phoneKey, orderCode, productType });
+                addLog('KIRVANO_PIX_TO_APPROVED', 'Cliente pagou PIX', 
+                    { requestId, phoneKey, orderCode, productType }, LOG_LEVELS.INFO);
                 await transferPixToApproved(phoneKey, remoteJid, orderCode, customerName, productType, totalPrice);
             } else {
-                addLog('KIRVANO_DIRECT_APPROVED', `Pagamento aprovado direto`, { phoneKey, orderCode, productType });
+                addLog('KIRVANO_DIRECT_APPROVED', 'Pagamento aprovado direto', 
+                    { requestId, phoneKey, orderCode, productType }, LOG_LEVELS.INFO);
+                
                 const pixTimeout = pixTimeouts.get(phoneKey);
                 if (pixTimeout) {
                     clearTimeout(pixTimeout.timeout);
                     pixTimeouts.delete(phoneKey);
                 }
+                
                 const funnelId = productType === 'CS' ? 'CS_APROVADA' : 'FB_APROVADA';
                 await startFunnel(phoneKey, remoteJid, funnelId, orderCode, customerName, productType, totalPrice, 'kirvano');
             }
         } else if (isPix && event.includes('GENERATED')) {
-            addLog('KIRVANO_PIX_GENERATED', `PIX gerado, aguardando 7min`, { phoneKey, orderCode, productType });
+            addLog('KIRVANO_PIX_GENERATED', 'PIX gerado', 
+                { requestId, phoneKey, orderCode, productType }, LOG_LEVELS.INFO);
+            
             const existingConv = conversations.get(phoneKey);
             if (existingConv && !existingConv.canceled) {
-                addLog('KIRVANO_PIX_DUPLICATE', `Conversa já existe`, { phoneKey });
+                addLog('KIRVANO_PIX_DUPLICATE', 'Conversa já existe', 
+                    { requestId, phoneKey }, LOG_LEVELS.WARNING);
                 return res.json({ success: true, message: 'Conversa já existe' });
             }
+            
             await createPixWaitingConversation(phoneKey, remoteJid, orderCode, customerName, productType, totalPrice);
         }
         
-        res.json({ success: true, phoneKey, productType });
+        res.json({ success: true, phoneKey, productType, requestId });
         
     } catch (error) {
-        addLog('KIRVANO_ERROR', error.message);
+        addLog('KIRVANO_ERROR', error.message, 
+            { requestId, stack: error.stack }, LOG_LEVELS.CRITICAL);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
 app.post('/webhook/evolution', async (req, res) => {
+    const requestId = Date.now() + Math.random();
+    
     try {
         const data = req.body;
         const messageData = data.data;
         
         if (!messageData || !messageData.key) {
+            addLog('EVOLUTION_NO_MESSAGE', 'Webhook sem dados', 
+                { requestId }, LOG_LEVELS.DEBUG);
             return res.json({ success: true });
         }
         
         const remoteJid = messageData.key.remoteJid;
         const fromMe = messageData.key.fromMe;
         const messageText = extractMessageText(messageData.message);
-        
-        // 🆕 NOVO: Detectar qual instância recebeu a mensagem
         const instanceName = data.instance || null;
         
         const incomingPhone = remoteJid.replace('@s.whatsapp.net', '');
         const phoneKey = extractPhoneKey(incomingPhone);
         
+        addLog('EVOLUTION_MESSAGE_RECEIVED', `"${messageText.substring(0, 50)}"`, 
+            { requestId, phoneKey, instanceName, fromMe }, LOG_LEVELS.INFO);
+        
         if (!phoneKey || phoneKey.length !== 8) {
+            addLog('EVOLUTION_INVALID_PHONE', 'PhoneKey inválido', 
+                { requestId, phone: incomingPhone }, LOG_LEVELS.WARNING);
             return res.json({ success: true });
         }
         
         if (fromMe) {
+            addLog('EVOLUTION_FROM_ME', 'Mensagem enviada por você', 
+                { requestId, phoneKey, messageText }, LOG_LEVELS.DEBUG);
+            
+            const triggeredFunnelId = checkManualTrigger(messageText);
+            
+            if (triggeredFunnelId) {
+                const funnel = funis.get(triggeredFunnelId);
+                
+                if (funnel && funnel.steps && funnel.steps.length > 0) {
+                    addLog('MANUAL_TRIGGER_FUNNEL_START', `Disparando funil ${triggeredFunnelId}`, 
+                        { requestId, phoneKey, instanceName, phrase: messageText }, LOG_LEVELS.INFO);
+                    
+                    if (instanceName && INSTANCES.includes(instanceName)) {
+                        stickyInstances.set(phoneKey, instanceName);
+                        addLog('STICKY_INSTANCE_SET', `Sticky: ${instanceName}`, 
+                            { requestId, phoneKey }, LOG_LEVELS.DEBUG);
+                    }
+                    
+                    await startFunnel(
+                        phoneKey, 
+                        remoteJid, 
+                        triggeredFunnelId, 
+                        'MANUAL_' + Date.now(), 
+                        'Cliente', 
+                        'MANUAL', 
+                        '', 
+                        'manual'
+                    );
+                    
+                    return res.json({ success: true, manualTrigger: true });
+                } else {
+                    addLog('MANUAL_TRIGGER_FUNNEL_EMPTY', `Funil ${triggeredFunnelId} vazio`, 
+                        { requestId, phoneKey }, LOG_LEVELS.ERROR);
+                }
+            }
+            
             return res.json({ success: true });
         }
         
         const hasLock = await acquireWebhookLock(phoneKey);
         if (!hasLock) {
+            addLog('EVOLUTION_LOCK_TIMEOUT', 'Não conseguiu lock', 
+                { requestId, phoneKey }, LOG_LEVELS.ERROR);
             return res.json({ success: false, message: 'Lock timeout' });
         }
         
         try {
             const conversation = findConversationByPhone(incomingPhone);
             
-            // 🆕 DEBUG: Log da mensagem recebida
-            addLog('WEBHOOK_MESSAGE_RECEIVED', `Mensagem: "${messageText}" | Instância: ${instanceName}`, { phoneKey });
-            
-            // 🆕 NOVO: Verificar frase-chave APENAS se não estiver em conversa ativa
             if (!conversation || conversation.completed || conversation.canceled) {
-                addLog('WEBHOOK_CHECK_PHRASE', `Verificando frases-chave para: "${messageText}"`, { phoneKey, totalPhrases: phraseTriggers.size });
+                addLog('EVOLUTION_CHECK_PHRASE', 'Verificando frases-chave', 
+                    { requestId, phoneKey, message: messageText }, LOG_LEVELS.DEBUG);
                 
                 const triggeredFunnelId = checkPhraseTrigger(phoneKey, messageText);
                 
@@ -822,12 +1108,13 @@ app.post('/webhook/evolution', async (req, res) => {
                     const funnel = funis.get(triggeredFunnelId);
                     
                     if (funnel && funnel.steps && funnel.steps.length > 0) {
-                        addLog('PHRASE_FUNNEL_START', `Iniciando funil por frase via ${instanceName}`, { phoneKey, funnelId: triggeredFunnelId });
+                        addLog('PHRASE_FUNNEL_START', `Iniciando funil ${triggeredFunnelId}`, 
+                            { requestId, phoneKey, instanceName }, LOG_LEVELS.INFO);
                         
-                        // 🆕 NOVO: Definir sticky instance ANTES de iniciar o funil
                         if (instanceName && INSTANCES.includes(instanceName)) {
                             stickyInstances.set(phoneKey, instanceName);
-                            addLog('STICKY_INSTANCE_SET', `Sticky instance definida: ${instanceName}`, { phoneKey });
+                            addLog('STICKY_INSTANCE_SET', `Sticky: ${instanceName}`, 
+                                { requestId, phoneKey }, LOG_LEVELS.DEBUG);
                         }
                         
                         await startFunnel(
@@ -840,20 +1127,26 @@ app.post('/webhook/evolution', async (req, res) => {
                             '', 
                             'phrase'
                         );
+                        
                         return res.json({ success: true, triggered: true });
                     } else {
-                        addLog('PHRASE_FUNNEL_EMPTY', `Funil ${triggeredFunnelId} está vazio`, { phoneKey });
+                        addLog('PHRASE_FUNNEL_EMPTY', `Funil ${triggeredFunnelId} vazio`, 
+                            { requestId, phoneKey }, LOG_LEVELS.ERROR);
                     }
                 }
             }
             
-            // Processar resposta de conversa existente
             if (!conversation || conversation.canceled || !conversation.waiting_for_response) {
-                addLog('WEBHOOK_NOT_WAITING', `Não aguardando resposta`, { phoneKey });
+                addLog('EVOLUTION_NOT_WAITING', 'Não aguardando resposta', 
+                    { requestId, phoneKey, hasConv: !!conversation, 
+                      canceled: conversation?.canceled, 
+                      waiting: conversation?.waiting_for_response }, LOG_LEVELS.DEBUG);
                 return res.json({ success: true });
             }
             
-            addLog('CLIENT_REPLY', `Resposta recebida`, { phoneKey, text: messageText.substring(0, 50) });
+            addLog('CLIENT_REPLY', `Cliente respondeu`, 
+                { requestId, phoneKey, text: messageText.substring(0, 100), 
+                  stepIndex: conversation.stepIndex }, LOG_LEVELS.INFO);
             
             conversation.waiting_for_response = false;
             conversation.lastReply = new Date();
@@ -868,13 +1161,12 @@ app.post('/webhook/evolution', async (req, res) => {
         }
         
     } catch (error) {
-        addLog('EVOLUTION_ERROR', error.message);
-        releaseWebhookLock(phoneKey);
+        addLog('EVOLUTION_ERROR', error.message, 
+            { requestId, stack: error.stack }, LOG_LEVELS.CRITICAL);
+        releaseWebhookLock(extractPhoneKey(req.body?.data?.key?.remoteJid || ''));
         res.status(500).json({ success: false, error: error.message });
     }
 });
-
-// ============ API ENDPOINTS ============
 
 app.get('/api/dashboard', (req, res) => {
     const instanceUsage = {};
@@ -903,13 +1195,73 @@ app.get('/api/dashboard', (req, res) => {
             error_conversations: errorCount,
             pending_pix: pixTimeouts.size,
             total_funnels: funis.size,
-            total_phrases: phraseTriggers.size, // 🆕 NOVO
+            total_phrases: phraseTriggers.size,
             total_instances: INSTANCES.length,
             sticky_instances: stickyInstances.size,
             instance_distribution: instanceUsage,
-            webhook_locks: webhookLocks.size
+            webhook_locks: webhookLocks.size,
+            total_logs: logs.length
         }
     });
+});
+
+app.get('/api/logs', (req, res) => {
+    const limit = parseInt(req.query.limit) || 100;
+    const level = req.query.level;
+    const type = req.query.type;
+    const phoneKey = req.query.phoneKey;
+    
+    let filteredLogs = logs;
+    
+    if (level) {
+        filteredLogs = filteredLogs.filter(log => log.level === level);
+    }
+    
+    if (type) {
+        filteredLogs = filteredLogs.filter(log => log.type.includes(type));
+    }
+    
+    if (phoneKey) {
+        filteredLogs = filteredLogs.filter(log => 
+            log.data && log.data.includes(phoneKey)
+        );
+    }
+    
+    const recentLogs = filteredLogs.slice(0, limit).map(log => ({
+        id: log.id,
+        timestamp: log.timestamp,
+        type: log.type,
+        level: log.level,
+        message: log.message,
+        data: log.data
+    }));
+    
+    res.json({ 
+        success: true, 
+        data: recentLogs,
+        total: filteredLogs.length,
+        filters: { level, type, phoneKey, limit }
+    });
+});
+
+app.get('/api/logs/export', (req, res) => {
+    const format = req.query.format || 'json';
+    const filename = `kirvano-logs-${new Date().toISOString().split('T')[0]}`;
+    
+    if (format === 'json') {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+        res.send(JSON.stringify(logs, null, 2));
+    } else if (format === 'txt') {
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.txt"`);
+        const txtContent = logs.map(log => 
+            `[${log.timestamp}] [${log.level}] ${log.type}: ${log.message}${log.data ? '\n  Data: ' + log.data : ''}`
+        ).join('\n\n');
+        res.send(txtContent);
+    } else {
+        res.status(400).json({ success: false, error: 'Formato inválido' });
+    }
 });
 
 app.get('/api/funnels', (req, res) => {
@@ -928,13 +1280,13 @@ app.post('/api/funnels', (req, res) => {
         return res.status(400).json({ success: false, error: 'Campos obrigatórios faltando' });
     }
     
-    // 🆕 NOVO: Aceitar também funis PHRASE_
     if (!funnel.id.startsWith('CS_') && !funnel.id.startsWith('FB_') && !funnel.id.startsWith('PHRASE_')) {
         return res.status(400).json({ success: false, error: 'Apenas funis CS, FB e PHRASE permitidos' });
     }
     
     funis.set(funnel.id, funnel);
-    addLog('FUNNEL_SAVED', 'Funil salvo: ' + funnel.id);
+    addLog('FUNNEL_SAVED', `Funil ${funnel.id} salvo`, 
+        { funnelId: funnel.id, steps: funnel.steps.length }, LOG_LEVELS.INFO);
     saveFunnelsToFile();
     
     res.json({ success: true, message: 'Funil salvo', data: funnel });
@@ -943,14 +1295,13 @@ app.post('/api/funnels', (req, res) => {
 app.delete('/api/funnels/:id', (req, res) => {
     const funnelId = req.params.id;
     
-    // Não permitir excluir funis padrão CS e FB
     if (funnelId.startsWith('CS_') || funnelId.startsWith('FB_')) {
         return res.status(400).json({ success: false, error: 'Não pode excluir funis padrão CS/FB' });
     }
     
     if (funis.has(funnelId)) {
         funis.delete(funnelId);
-        addLog('FUNNEL_DELETED', 'Funil excluído: ' + funnelId);
+        addLog('FUNNEL_DELETED', `Funil ${funnelId} excluído`, null, LOG_LEVELS.INFO);
         saveFunnelsToFile();
         res.json({ success: true, message: 'Funil excluído' });
     } else {
@@ -966,13 +1317,13 @@ app.get('/api/funnels/export', (req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.send(JSON.stringify({
-            version: '5.0',
+            version: '5.3',
             exportDate: new Date().toISOString(),
             totalFunnels: funnelsArray.length,
             funnels: funnelsArray
         }, null, 2));
         
-        addLog('FUNNELS_EXPORT', `Export: ${funnelsArray.length} funis`);
+        addLog('FUNNELS_EXPORT', `Export: ${funnelsArray.length} funis`, null, LOG_LEVELS.INFO);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -999,7 +1350,8 @@ app.post('/api/funnels/import', (req, res) => {
         });
         
         saveFunnelsToFile();
-        addLog('FUNNELS_IMPORT', `Import: ${importedCount} importados, ${skippedCount} ignorados`);
+        addLog('FUNNELS_IMPORT', `Import: ${importedCount} importados, ${skippedCount} ignorados`, 
+            null, LOG_LEVELS.INFO);
         
         res.json({ 
             success: true, 
@@ -1012,7 +1364,6 @@ app.post('/api/funnels/import', (req, res) => {
     }
 });
 
-// 🆕 NOVO: API Endpoints para Frases-Chave
 app.get('/api/phrases', (req, res) => {
     const phrasesList = Array.from(phraseTriggers.entries()).map(([phrase, data]) => ({
         phrase,
@@ -1046,7 +1397,8 @@ app.post('/api/phrases', (req, res) => {
         triggerCount: 0
     });
     
-    addLog('PHRASE_ADDED', `Frase cadastrada: "${normalizedPhrase}"`, { funnelId });
+    addLog('PHRASE_ADDED', `Frase cadastrada: "${normalizedPhrase}"`, 
+        { funnelId }, LOG_LEVELS.INFO);
     savePhrasesToFile();
     
     res.json({ success: true, message: 'Frase cadastrada com sucesso' });
@@ -1074,7 +1426,7 @@ app.put('/api/phrases/:phrase', (req, res) => {
     }
     
     phraseTriggers.set(phrase, data);
-    addLog('PHRASE_UPDATED', `Frase atualizada: "${phrase}"`);
+    addLog('PHRASE_UPDATED', `Frase atualizada: "${phrase}"`, null, LOG_LEVELS.INFO);
     savePhrasesToFile();
     
     res.json({ success: true, message: 'Frase atualizada com sucesso' });
@@ -1085,9 +1437,90 @@ app.delete('/api/phrases/:phrase', (req, res) => {
     
     if (phraseTriggers.has(phrase)) {
         phraseTriggers.delete(phrase);
-        addLog('PHRASE_DELETED', `Frase excluída: "${phrase}"`);
+        addLog('PHRASE_DELETED', `Frase excluída: "${phrase}"`, null, LOG_LEVELS.INFO);
         savePhrasesToFile();
         res.json({ success: true, message: 'Frase excluída com sucesso' });
+    } else {
+        res.status(404).json({ success: false, error: 'Frase não encontrada' });
+    }
+});
+
+app.get('/api/manual-triggers', (req, res) => {
+    const triggersList = Array.from(manualTriggers.entries()).map(([phrase, data]) => ({
+        phrase,
+        funnelId: data.funnelId,
+        active: data.active !== false,
+        triggerCount: data.triggerCount || 0
+    }));
+    res.json({ success: true, data: triggersList });
+});
+
+app.post('/api/manual-triggers', (req, res) => {
+    const { phrase, funnelId } = req.body;
+    
+    if (!phrase || !funnelId) {
+        return res.status(400).json({ success: false, error: 'Frase e funil são obrigatórios' });
+    }
+    
+    const normalizedPhrase = phrase.trim();
+    
+    if (manualTriggers.has(normalizedPhrase)) {
+        return res.status(400).json({ success: false, error: 'Frase já cadastrada' });
+    }
+    
+    if (!funis.has(funnelId)) {
+        return res.status(400).json({ success: false, error: 'Funil não encontrado' });
+    }
+    
+    manualTriggers.set(normalizedPhrase, {
+        funnelId,
+        active: true,
+        triggerCount: 0
+    });
+    
+    addLog('MANUAL_TRIGGER_ADDED', `Frase manual cadastrada: "${normalizedPhrase}"`, 
+        { funnelId }, LOG_LEVELS.INFO);
+    saveManualTriggersToFile();
+    
+    res.json({ success: true, message: 'Frase de disparo manual cadastrada com sucesso' });
+});
+
+app.put('/api/manual-triggers/:phrase', (req, res) => {
+    const phrase = decodeURIComponent(req.params.phrase);
+    const { funnelId, active } = req.body;
+    
+    if (!manualTriggers.has(phrase)) {
+        return res.status(404).json({ success: false, error: 'Frase não encontrada' });
+    }
+    
+    const data = manualTriggers.get(phrase);
+    
+    if (funnelId !== undefined) {
+        if (!funis.has(funnelId)) {
+            return res.status(400).json({ success: false, error: 'Funil não encontrado' });
+        }
+        data.funnelId = funnelId;
+    }
+    
+    if (active !== undefined) {
+        data.active = active;
+    }
+    
+    manualTriggers.set(phrase, data);
+    addLog('MANUAL_TRIGGER_UPDATED', `Frase manual atualizada: "${phrase}"`, null, LOG_LEVELS.INFO);
+    saveManualTriggersToFile();
+    
+    res.json({ success: true, message: 'Frase de disparo manual atualizada com sucesso' });
+});
+
+app.delete('/api/manual-triggers/:phrase', (req, res) => {
+    const phrase = decodeURIComponent(req.params.phrase);
+    
+    if (manualTriggers.has(phrase)) {
+        manualTriggers.delete(phrase);
+        addLog('MANUAL_TRIGGER_DELETED', `Frase manual excluída: "${phrase}"`, null, LOG_LEVELS.INFO);
+        saveManualTriggersToFile();
+        res.json({ success: true, message: 'Frase de disparo manual excluída com sucesso' });
     } else {
         res.status(404).json({ success: false, error: 'Frase não encontrada' });
     }
@@ -1115,24 +1548,12 @@ app.get('/api/conversations', (req, res) => {
         hasError: conv.hasError || false,
         errorMessage: conv.errorMessage,
         transferredFromPix: conv.transferredFromPix || false,
-        source: conv.source || 'kirvano' // 🆕 NOVO
+        source: conv.source || 'kirvano'
     }));
     
     conversationsList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
     res.json({ success: true, data: conversationsList });
-});
-
-app.get('/api/logs', (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
-    const recentLogs = logs.slice(0, limit).map(log => ({
-        id: log.id,
-        timestamp: log.timestamp,
-        type: log.type,
-        message: log.message
-    }));
-    
-    res.json({ success: true, data: recentLogs });
 });
 
 app.get('/api/debug/evolution', async (req, res) => {
@@ -1145,7 +1566,9 @@ app.get('/api/debug/evolution', async (req, res) => {
         sticky_instances_count: stickyInstances.size,
         pix_timeouts_active: pixTimeouts.size,
         webhook_locks_active: webhookLocks.size,
-        phrase_triggers_count: phraseTriggers.size, // 🆕 NOVO
+        phrase_triggers_count: phraseTriggers.size,
+        manual_triggers_count: manualTriggers.size,
+        total_logs: logs.length,
         test_results: []
     };
     
@@ -1190,47 +1613,53 @@ app.get('/teste.html', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'teste.html'));
 });
 
-// ============ INICIALIZAÇÃO ============
+app.get('/logs.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'logs.html'));
+});
+
 async function initializeData() {
     console.log('🔄 Carregando dados...');
     await loadFunnelsFromFile();
     await loadConversationsFromFile();
-    await loadPhrasesFromFile(); // 🆕 NOVO
+    await loadPhrasesFromFile();
+    await loadManualTriggersFromFile();
+    await loadLogsFromFile();
     console.log('✅ Inicialização concluída');
     console.log('📊 Funis:', funis.size);
     console.log('💬 Conversas:', conversations.size);
-    console.log('🔑 Frases:', phraseTriggers.size); // 🆕 NOVO
+    console.log('🔑 Frases:', phraseTriggers.size);
+    console.log('🎯 Frases Manuais:', manualTriggers.size);
+    console.log('📋 Logs:', logs.length);
 }
 
 app.listen(PORT, async () => {
     console.log('='.repeat(70));
-    console.log('🚀 KIRVANO SYSTEM V5.0 - SISTEMA COMPLETO DE FUNIS');
+    console.log('🚀 KIRVANO SYSTEM V5.3 - SISTEMA COMPLETO DE FUNIS');
     console.log('='.repeat(70));
     console.log('Porta:', PORT);
     console.log('Evolution:', EVOLUTION_BASE_URL);
     console.log('Instâncias:', INSTANCES.length);
     console.log('');
-    console.log('✅ NOVIDADES V5.0:');
-    console.log('  1. ✅ Funis CS e FB (Kirvano webhook)');
-    console.log('  2. ✅ Funis por Frase-Chave (anúncios diretos)');
-    console.log('  3. ✅ Cooldown de 24h por frase+telefone');
-    console.log('  4. ✅ Editor simplificado (5 blocos)');
-    console.log('  5. ✅ Áudio PTT Base64 funcionando');
-    console.log('  6. ✅ Sistema 100% unificado');
-    console.log('  7. ✅ Detecção inteligente de frases (case-insensitive)');
-    console.log('  8. ✅ Contador de acionamentos por frase');
+    console.log('✅ NOVIDADES V5.3:');
+    console.log('  1. 🆕 FRASES DE DISPARO MANUAL (você envia → dispara funil)');
+    console.log('  2. ✅ ViewOnce REMOVIDO (não suportado pela Evolution API)');
+    console.log('  3. ✅ Detecção de frases FLEXÍVEL (contém frase na mesma ordem)');
+    console.log('  4. ✅ 15 instâncias (GABY01-GABY15)');
+    console.log('  5. ✅ Sistema de logs completo e exportável');
+    console.log('  6. ✅ Validações extras contra race conditions');
     console.log('');
     console.log('📡 Endpoints:');
-    console.log('  POST /webhook/kirvano       - Eventos Kirvano');
-    console.log('  POST /webhook/evolution     - Mensagens WhatsApp');
-    console.log('  GET  /api/funnels           - Listar funis');
-    console.log('  POST /api/funnels           - Criar/editar funil');
-    console.log('  GET  /api/phrases           - Listar frases-chave');
-    console.log('  POST /api/phrases           - Cadastrar frase');
-    console.log('  PUT  /api/phrases/:phrase   - Editar frase');
-    console.log('  DELETE /api/phrases/:phrase - Excluir frase');
+    console.log('  POST /webhook/kirvano           - Eventos Kirvano');
+    console.log('  POST /webhook/evolution         - Mensagens WhatsApp');
+    console.log('  GET  /api/manual-triggers       - Listar frases manuais');
+    console.log('  POST /api/manual-triggers       - Criar frase manual');
+    console.log('  PUT  /api/manual-triggers/:id   - Atualizar frase manual');
+    console.log('  DELETE /api/manual-triggers/:id - Deletar frase manual');
     console.log('');
-    console.log('🌐 Frontend: http://localhost:' + PORT);
+    console.log('🌐 Frontend:');
+    console.log('  http://localhost:' + PORT + '           - Dashboard principal');
+    console.log('  http://localhost:' + PORT + '/logs.html - Sistema de logs');
+    console.log('  http://localhost:' + PORT + '/teste.html - Simulador de testes');
     console.log('='.repeat(70));
     
     await initializeData();
