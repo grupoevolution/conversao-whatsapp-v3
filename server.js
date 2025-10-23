@@ -1058,6 +1058,25 @@ app.post('/webhook/evolution', async (req, res) => {
                 const funnel = funis.get(triggeredFunnelId);
                 
                 if (funnel && funnel.steps && funnel.steps.length > 0) {
+                    const existingConversation = conversations.get(phoneKey);
+                    
+                    if (existingConversation && !existingConversation.completed && !existingConversation.canceled) {
+                        addLog('MANUAL_TRIGGER_CANCEL_EXISTING', `Cancelando funil atual: ${existingConversation.funnelId}`, 
+                            { requestId, phoneKey, oldFunnel: existingConversation.funnelId, newFunnel: triggeredFunnelId }, 
+                            LOG_LEVELS.WARNING);
+                        
+                        existingConversation.canceled = true;
+                        existingConversation.waiting_for_response = false;
+                        conversations.set(phoneKey, existingConversation);
+                        
+                        if (pixTimeouts.has(phoneKey)) {
+                            clearTimeout(pixTimeouts.get(phoneKey));
+                            pixTimeouts.delete(phoneKey);
+                            addLog('PIX_TIMEOUT_CLEARED', 'Timeout PIX cancelado', 
+                                { phoneKey }, LOG_LEVELS.DEBUG);
+                        }
+                    }
+                    
                     addLog('MANUAL_TRIGGER_FUNNEL_START', `Disparando funil ${triggeredFunnelId}`, 
                         { requestId, phoneKey, instanceName, phrase: messageText }, LOG_LEVELS.INFO);
                     
@@ -1082,6 +1101,7 @@ app.post('/webhook/evolution', async (req, res) => {
                 } else {
                     addLog('MANUAL_TRIGGER_FUNNEL_EMPTY', `Funil ${triggeredFunnelId} vazio`, 
                         { requestId, phoneKey }, LOG_LEVELS.ERROR);
+                    return res.json({ success: false, error: 'Funil vazio' });
                 }
             }
             
