@@ -617,6 +617,7 @@
             <div class="main-tabs">
                 <button class="main-tab active" onclick="switchMainTab('editor')">Editor de Funis</button>
                 <button class="main-tab" onclick="switchMainTab('phrases')">Funis por Frase</button>
+                <button class="main-tab" onclick="switchMainTab('remarketing')">Remarketing</button>
                 <button class="main-tab" onclick="switchMainTab('events')">Conversas</button>
             </div>
 
@@ -738,6 +739,95 @@
                         <div class="empty-workspace">
                             <h3>Nenhuma frase de disparo cadastrada</h3>
                             <p>Clique em "Adicionar Frase de Disparo" para começar</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- REMARKETING -->
+            <div id="remarketing" class="tab-content">
+                <div style="padding: 24px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                        <h2 style="margin: 0;">Campanhas de Remarketing</h2>
+                        <button class="btn" onclick="showNewCampaignForm()">+ Nova Campanha</button>
+                    </div>
+
+                    <!-- Formulário Nova Campanha -->
+                    <div id="newCampaignForm" style="display: none; background: #f8fafc; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
+                        <h3 style="margin-bottom: 20px;">Nova Campanha de Remarketing</h3>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Nome da Campanha</label>
+                                <input type="text" id="campaignName" placeholder="Ex: Black Friday 2025" 
+                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Funil</label>
+                                <select id="campaignFunnel" style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                                    <option value="">Selecione um funil...</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Lista de Telefones (um por linha)</label>
+                            <textarea id="campaignPhones" placeholder="5575981734444&#10;75981234567&#10;11987654321"
+                                style="width: 100%; min-height: 150px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-family: monospace;"></textarea>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px;">
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Horário Início</label>
+                                <input type="time" id="campaignStartTime" value="07:00"
+                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Horário Fim</label>
+                                <input type="time" id="campaignEndTime" value="22:00"
+                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Mín (min)</label>
+                                <input type="number" id="campaignDelayMin" value="30" min="1"
+                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Máx (min)</label>
+                                <input type="number" id="campaignDelayMax" value="55" min="1"
+                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Limite por Instância/Dia</label>
+                            <input type="number" id="campaignDailyLimit" value="10" min="1" max="50"
+                                style="width: 200px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            <span style="margin-left: 8px; color: #6b7280;">leads por instância por dia</span>
+                        </div>
+
+                        <div style="display: flex; gap: 12px;">
+                            <button class="btn btn-success" onclick="createCampaign()">Criar Campanha</button>
+                            <button class="btn" style="background: #6b7280;" onclick="hideNewCampaignForm()">Cancelar</button>
+                        </div>
+                    </div>
+
+                    <!-- Lista de Campanhas -->
+                    <div id="campaignsList">
+                        <!-- Campanhas serão carregadas aqui -->
+                    </div>
+
+                    <!-- Modal de Detalhes da Campanha -->
+                    <div id="campaignModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; padding: 40px; overflow-y: auto;">
+                        <div style="max-width: 900px; margin: 0 auto; background: white; border-radius: 16px; padding: 32px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                                <h2 id="modalCampaignName" style="margin: 0;"></h2>
+                                <button onclick="closeCampaignModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">×</button>
+                            </div>
+
+                            <div id="modalCampaignContent">
+                                <!-- Conteúdo dinâmico -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -866,6 +956,8 @@
             } else if (tabName === 'phrases') {
                 loadPhrases();
                 loadManualTriggers(); // 🆕 NOVO
+            } else if (tabName === 'remarketing') {
+                loadCampaigns(); // 🆕 NOVO: Carregar campanhas
             }
         }
 
@@ -1823,6 +1915,363 @@
                 closeManualTriggerModal();
             }
         });
+
+        // ============ REMARKETING ============
+        
+        async function loadCampaigns() {
+            try {
+                const response = await fetch('/api/remarketing/campaigns');
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayCampaigns(result.data);
+                }
+            } catch (error) {
+                console.error('Erro ao carregar campanhas:', error);
+            }
+        }
+
+        function displayCampaigns(campaigns) {
+            const container = document.getElementById('campaignsList');
+            
+            if (campaigns.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
+                        <div style="font-size: 48px; margin-bottom: 16px;">📢</div>
+                        <h3>Nenhuma campanha criada</h3>
+                        <p>Clique em "Nova Campanha" para começar</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = campaigns.map(campaign => {
+                const statusColors = {
+                    active: '#10b981',
+                    paused: '#f59e0b',
+                    stopped: '#dc2626',
+                    completed: '#6b7280'
+                };
+                
+                const statusLabels = {
+                    active: '🟢 Ativa',
+                    paused: '🟡 Pausada',
+                    stopped: '🔴 Parada',
+                    completed: '✅ Concluída'
+                };
+
+                return `
+                    <div style="background: white; border: 2px solid #e5e7eb; border-radius: 12px; padding: 24px; margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
+                            <div>
+                                <h3 style="margin: 0 0 8px 0;">${campaign.name}</h3>
+                                <div style="display: flex; gap: 16px; font-size: 14px; color: #6b7280;">
+                                    <span>📊 ${campaign.progress.sent}/${campaign.progress.total} enviados</span>
+                                    <span>❌ ${campaign.progress.errors} erros</span>
+                                    <span style="color: ${statusColors[campaign.status]}; font-weight: 600;">${statusLabels[campaign.status]}</span>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                ${campaign.status === 'paused' ? 
+                                    `<button class="btn btn-success btn-small" onclick="startCampaign('${campaign.id}')">▶️ Iniciar</button>` : ''}
+                                ${campaign.status === 'active' ? 
+                                    `<button class="btn btn-small" style="background: #f59e0b;" onclick="pauseCampaign('${campaign.id}')">⏸️ Pausar</button>` : ''}
+                                ${campaign.status === 'active' || campaign.status === 'paused' ? 
+                                    `<button class="btn btn-danger btn-small" onclick="stopCampaign('${campaign.id}')">⏹️ Parar</button>` : ''}
+                                <button class="btn btn-small" onclick="viewCampaignDetails('${campaign.id}')">👁️ Ver</button>
+                                ${campaign.status !== 'active' ? 
+                                    `<button class="btn btn-danger btn-small" onclick="deleteCampaign('${campaign.id}')">🗑️</button>` : ''}
+                            </div>
+                        </div>
+
+                        <!-- Barra de Progresso -->
+                        <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                            <div style="background: #667eea; height: 100%; width: ${campaign.progress.percentage}%; transition: width 0.3s;"></div>
+                        </div>
+                        <div style="font-size: 12px; color: #6b7280; text-align: right;">${campaign.progress.percentage}% completo</div>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; font-size: 13px;">
+                            <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
+                                <div style="color: #6b7280;">Funil</div>
+                                <div style="font-weight: 600; color: #1f2937;">${campaign.funnelId}</div>
+                            </div>
+                            <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
+                                <div style="color: #6b7280;">Horário</div>
+                                <div style="font-weight: 600; color: #1f2937;">${String(campaign.schedule.startHour).padStart(2,'0')}:${String(campaign.schedule.startMin).padStart(2,'0')} - ${String(campaign.schedule.endHour).padStart(2,'0')}:${String(campaign.schedule.endMin).padStart(2,'0')}</div>
+                            </div>
+                            <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
+                                <div style="color: #6b7280;">Delay</div>
+                                <div style="font-weight: 600; color: #1f2937;">${campaign.delayMin}-${campaign.delayMax} min</div>
+                            </div>
+                            <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
+                                <div style="color: #6b7280;">Limite/Dia</div>
+                                <div style="font-weight: 600; color: #1f2937;">${campaign.dailyLimitPerInstance} leads</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showNewCampaignForm() {
+            // Carregar funis no select
+            const select = document.getElementById('campaignFunnel');
+            select.innerHTML = '<option value="">Selecione um funil...</option>';
+            
+            Object.values(allFunnels).forEach(funnel => {
+                const option = document.createElement('option');
+                option.value = funnel.id;
+                option.textContent = funnel.name;
+                select.appendChild(option);
+            });
+            
+            document.getElementById('newCampaignForm').style.display = 'block';
+        }
+
+        function hideNewCampaignForm() {
+            document.getElementById('newCampaignForm').style.display = 'none';
+        }
+
+        async function createCampaign() {
+            const name = document.getElementById('campaignName').value.trim();
+            const funnelId = document.getElementById('campaignFunnel').value;
+            const phoneList = document.getElementById('campaignPhones').value.trim();
+            const startTime = document.getElementById('campaignStartTime').value;
+            const endTime = document.getElementById('campaignEndTime').value;
+            const delayMin = parseInt(document.getElementById('campaignDelayMin').value);
+            const delayMax = parseInt(document.getElementById('campaignDelayMax').value);
+            const dailyLimit = parseInt(document.getElementById('campaignDailyLimit').value);
+
+            if (!name || !funnelId || !phoneList) {
+                alert('⚠️ Preencha todos os campos obrigatórios!');
+                return;
+            }
+
+            if (delayMin >= delayMax) {
+                alert('⚠️ Delay mínimo deve ser menor que o máximo!');
+                return;
+            }
+
+            const [startHour, startMin] = startTime.split(':').map(Number);
+            const [endHour, endMin] = endTime.split(':').map(Number);
+
+            try {
+                const response = await fetch('/api/remarketing/campaigns', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        funnelId,
+                        phoneList,
+                        schedule: { startHour, startMin, endHour, endMin },
+                        delayMin,
+                        delayMax,
+                        dailyLimitPerInstance: dailyLimit
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    let msg = `✅ Campanha "${name}" criada com sucesso!\n\n`;
+                    msg += `✅ ${result.campaign.leads.length} números válidos\n`;
+                    if (result.invalidPhones && result.invalidPhones.length > 0) {
+                        msg += `⚠️ ${result.invalidPhones.length} números inválidos foram ignorados`;
+                    }
+                    alert(msg);
+                    hideNewCampaignForm();
+                    await loadCampaigns();
+                    
+                    // Limpar formulário
+                    document.getElementById('campaignName').value = '';
+                    document.getElementById('campaignPhones').value = '';
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Erro ao criar campanha:', error);
+                alert('❌ Erro ao criar campanha');
+            }
+        }
+
+        async function startCampaign(id) {
+            if (!confirm('Iniciar esta campanha? Ela começará a enviar mensagens automaticamente.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/remarketing/campaigns/${id}/start`, {
+                    method: 'PUT'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('✅ Campanha iniciada!');
+                    await loadCampaigns();
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Erro ao iniciar campanha:', error);
+                alert('❌ Erro ao iniciar campanha');
+            }
+        }
+
+        async function pauseCampaign(id) {
+            try {
+                const response = await fetch(`/api/remarketing/campaigns/${id}/pause`, {
+                    method: 'PUT'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('⏸️ Campanha pausada!');
+                    await loadCampaigns();
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Erro ao pausar campanha:', error);
+                alert('❌ Erro ao pausar campanha');
+            }
+        }
+
+        async function stopCampaign(id) {
+            if (!confirm('⚠️ Parar esta campanha DEFINITIVAMENTE? Esta ação não pode ser desfeita!')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/remarketing/campaigns/${id}/stop`, {
+                    method: 'PUT'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('⏹️ Campanha parada definitivamente!');
+                    await loadCampaigns();
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Erro ao parar campanha:', error);
+                alert('❌ Erro ao parar campanha');
+            }
+        }
+
+        async function deleteCampaign(id) {
+            if (!confirm('🗑️ Excluir esta campanha permanentemente?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/remarketing/campaigns/${id}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('✅ Campanha excluída!');
+                    await loadCampaigns();
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Erro ao excluir campanha:', error);
+                alert('❌ Erro ao excluir campanha');
+            }
+        }
+
+        async function viewCampaignDetails(id) {
+            try {
+                const response = await fetch(`/api/remarketing/campaigns/${id}/status`);
+                const result = await response.json();
+
+                if (result.success) {
+                    const campaign = result.campaign;
+                    const instances = result.instancesStatus;
+
+                    document.getElementById('modalCampaignName').textContent = campaign.name;
+                    
+                    let html = `
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;">
+                            <div style="background: #f0f4ff; padding: 16px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 32px; font-weight: 700; color: #667eea;">${campaign.progress.sent}</div>
+                                <div style="color: #6b7280; font-size: 14px;">Enviados</div>
+                            </div>
+                            <div style="background: #fef3c7; padding: 16px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 32px; font-weight: 700; color: #f59e0b;">${campaign.progress.total - campaign.progress.sent}</div>
+                                <div style="color: #6b7280; font-size: 14px;">Pendentes</div>
+                            </div>
+                            <div style="background: #fee2e2; padding: 16px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 32px; font-weight: 700; color: #dc2626;">${campaign.progress.errors}</div>
+                                <div style="color: #6b7280; font-size: 14px;">Erros</div>
+                            </div>
+                        </div>
+
+                        <h3 style="margin-bottom: 16px;">Status das Instâncias</h3>
+                        <div style="max-height: 400px; overflow-y: auto;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead style="position: sticky; top: 0; background: white;">
+                                    <tr style="background: #f8fafc;">
+                                        <th style="padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb;">Instância</th>
+                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Enviados Hoje</th>
+                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Status</th>
+                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Último Envio</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${instances.map(inst => `
+                                        <tr style="border-bottom: 1px solid #e5e7eb;">
+                                            <td style="padding: 12px; font-weight: 600;">${inst.name}</td>
+                                            <td style="padding: 12px; text-align: center;">${inst.sentToday}/${inst.limit}</td>
+                                            <td style="padding: 12px; text-align: center;">
+                                                ${inst.available ? '🟢 Disponível' : '🔴 Limite'}
+                                            </td>
+                                            <td style="padding: 12px; text-align: center; font-size: 12px; color: #6b7280;">
+                                                ${inst.lastSend ? new Date(inst.lastSend).toLocaleTimeString('pt-BR') : '-'}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+
+                    document.getElementById('modalCampaignContent').innerHTML = html;
+                    document.getElementById('campaignModal').style.display = 'block';
+                } else {
+                    alert('❌ Erro ao carregar detalhes');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar detalhes:', error);
+                alert('❌ Erro ao carregar detalhes');
+            }
+        }
+
+        function closeCampaignModal() {
+            document.getElementById('campaignModal').style.display = 'none';
+        }
+
+        // Atualizar campanhas automaticamente quando a aba estiver ativa
+        let remarketingInterval = null;
+        
+        function startRemarketingUpdates() {
+            if (remarketingInterval) clearInterval(remarketingInterval);
+            remarketingInterval = setInterval(() => {
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab && activeTab.id === 'remarketing') {
+                    loadCampaigns();
+                }
+            }, 10000); // Atualiza a cada 10 segundos
+        }
+
+        // Iniciar atualizações ao carregar
+        startRemarketingUpdates();
     </script>
 </body>
 </html>
