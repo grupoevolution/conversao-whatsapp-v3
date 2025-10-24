@@ -25,10 +25,17 @@ const PRODUCT_MAPPING = {
     '5288799c-d8e3-48ce-a91d-587814acdee5': 'FB'
 };
 
+// Códigos dos planos PerfectPay
+const PERFECTPAY_PLANS = {
+    'PPLQQMSFI': 'CS',
+    'PPLQQMSFH': 'CS',
+    'PPLQQM9AP': 'FB'
+};
+
 const INSTANCES = [
     'GABY01', 'GABY02', 'GABY03', 'GABY04', 'GABY05', 
     'GABY06', 'GABY07', 'GABY08', 'GABY09', 'GABY10', 
-    'GABY11', 'GABY12', 'GABY13', 'GABY14', 'GABY15'
+    'GABY11', 'GABY12', 'GABY13', 'GABY 14', 'GABY15'
 ];
 
 // ============ ARMAZENAMENTO EM MEMÓRIA ============
@@ -43,6 +50,7 @@ let lastSuccessfulInstanceIndex = -1;
 let phraseTriggers = new Map();
 let phraseCooldowns = new Map();
 let manualTriggers = new Map();
+let manualTriggerCooldowns = new Map();
 
 const LOG_LEVELS = {
     DEBUG: 'DEBUG',
@@ -437,7 +445,7 @@ function checkPhraseTrigger(phoneKey, messageText) {
     return null;
 }
 
-function checkManualTrigger(messageText) {
+function checkManualTrigger(messageText, phoneKey) {
     const normalizedMessage = messageText.toLowerCase().trim();
     
     addLog('MANUAL_TRIGGER_CHECK', `Verificando frase manual: "${normalizedMessage}"`, 
@@ -451,9 +459,23 @@ function checkManualTrigger(messageText) {
         const normalizedPhrase = phrase.toLowerCase().trim();
         
         if (normalizedMessage.includes(normalizedPhrase)) {
+            // Verificar cooldown de 30 segundos para evitar disparos múltiplos
+            const cooldownKey = `${phoneKey}:${phrase}`;
+            const lastTrigger = manualTriggerCooldowns.get(cooldownKey);
+            const cooldownTime = 30000; // 30 segundos
+            
+            if (lastTrigger && (Date.now() - lastTrigger) < cooldownTime) {
+                const remainingSeconds = Math.ceil((cooldownTime - (Date.now() - lastTrigger)) / 1000);
+                addLog('MANUAL_TRIGGER_COOLDOWN', `Cooldown ativo (${remainingSeconds}s restantes)`, 
+                    { phoneKey, phrase }, LOG_LEVELS.WARNING);
+                return null;
+            }
+            
             addLog('MANUAL_TRIGGER_DETECTED', `Frase manual detectada: "${phrase}"`, 
                 { funnelId: data.funnelId }, LOG_LEVELS.INFO);
             
+            // Registrar o disparo e atualizar cooldown
+            manualTriggerCooldowns.set(cooldownKey, Date.now());
             data.triggerCount = (data.triggerCount || 0) + 1;
             manualTriggers.set(phrase, data);
             saveManualTriggersToFile();
@@ -1018,6 +1040,89 @@ app.post('/webhook/kirvano', async (req, res) => {
     }
 });
 
+app.post('/webhook/perfect', async (req, res) => {
+    const requestId = Date.now() + Math.random();
+    
+    try {
+        const data = req.body;
+        
+        addLog('PERFECTPAY_WEBHOOK_RECEIVED', 'Webhook PerfectPay recebido', 
+            { requestId, body: data }, LOG_LEVELS.INFO);
+        
+        const planCode = data.plan?.code;
+        const saleStatus = data.sale_status_enum_key;
+        const saleCode = data.code || 'ORDER_' + Date.now();
+        const customerName = data.customer?.full_name || 'Cliente';
+        const phoneArea = data.customer?.phone_area_code || '';
+        const phoneNumber = data.customer?.phone_number || '';
+        const totalPrice = data.sale_amount ? `R$ ${data.sale_amount.toFixed(2)}` : 'R$ 0,00';
+        
+        if (!planCode || !PERFECTPAY_PLANS[planCode]) {
+            addLog('PERFECTPAY_INVALID_PLAN', 'Plano não mapeado', 
+                { requestId, planCode }, LOG_LEVELS.WARNING);
+            return res.json({ success: false, message: 'Plano não configurado' });
+        }
+        
+        const productType = PERFECTPAY_PLANS[planCode];
+        const fullPhone = phoneArea + phoneNumber;
+        const phoneKey = extractPhoneKey(fullPhone);
+        
+        if (!phoneKey || phoneKey.length !== 8) {
+            addLog('PERFECTPAY_INVALID_PHONE', 'Telefone inválido', 
+                { requestId, phone: fullPhone }, LOG_LEVELS.WARNING);
+            return res.json({ success: false, message: 'Telefone inválido' });
+        }
+        
+        const remoteJid = phoneToRemoteJid(fullPhone);
+        registerPhone(fullPhone, phoneKey);
+        
+        addLog('PERFECTPAY_EVENT', `${saleStatus} - ${customerName}`, 
+            { requestId, saleCode, phoneKey, planCode, productType }, LOG_LEVELS.INFO);
+        
+        if (saleStatus === 'approved') {
+            const existingConv = conversations.get(phoneKey);
+            const isPixFunnel = existingConv && (existingConv.funnelId === 'CS_PIX' || existingConv.funnelId === 'FB_PIX');
+            
+            if (isPixFunnel) {
+                addLog('PERFECTPAY_PIX_TO_APPROVED', 'Cliente pagou PIX', 
+                    { requestId, phoneKey, saleCode, productType }, LOG_LEVELS.INFO);
+                await transferPixToApproved(phoneKey, remoteJid, saleCode, customerName, productType, totalPrice);
+            } else {
+                addLog('PERFECTPAY_DIRECT_APPROVED', 'Pagamento aprovado direto', 
+                    { requestId, phoneKey, saleCode, productType }, LOG_LEVELS.INFO);
+                
+                const pixTimeout = pixTimeouts.get(phoneKey);
+                if (pixTimeout) {
+                    clearTimeout(pixTimeout.timeout);
+                    pixTimeouts.delete(phoneKey);
+                }
+                
+                const funnelId = productType === 'CS' ? 'CS_APROVADA' : 'FB_APROVADA';
+                await startFunnel(phoneKey, remoteJid, funnelId, saleCode, customerName, productType, totalPrice, 'perfectpay');
+            }
+        } else if (saleStatus === 'pending') {
+            addLog('PERFECTPAY_PIX_PENDING', 'PIX pendente', 
+                { requestId, phoneKey, saleCode, productType }, LOG_LEVELS.INFO);
+            
+            const existingConv = conversations.get(phoneKey);
+            if (existingConv && !existingConv.canceled) {
+                addLog('PERFECTPAY_PIX_DUPLICATE', 'Conversa já existe', 
+                    { requestId, phoneKey }, LOG_LEVELS.WARNING);
+                return res.json({ success: true, message: 'Conversa já existe' });
+            }
+            
+            await createPixWaitingConversation(phoneKey, remoteJid, saleCode, customerName, productType, totalPrice);
+        }
+        
+        res.json({ success: true, phoneKey, productType, requestId });
+        
+    } catch (error) {
+        addLog('PERFECTPAY_ERROR', error.message, 
+            { requestId, stack: error.stack }, LOG_LEVELS.CRITICAL);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/webhook/evolution', async (req, res) => {
     const requestId = Date.now() + Math.random();
     
@@ -1052,7 +1157,7 @@ app.post('/webhook/evolution', async (req, res) => {
             addLog('EVOLUTION_FROM_ME', 'Mensagem enviada por você', 
                 { requestId, phoneKey, messageText }, LOG_LEVELS.DEBUG);
             
-            const triggeredFunnelId = checkManualTrigger(messageText);
+            const triggeredFunnelId = checkManualTrigger(messageText, phoneKey);
             
             if (triggeredFunnelId) {
                 const funnel = funis.get(triggeredFunnelId);
@@ -1077,14 +1182,18 @@ app.post('/webhook/evolution', async (req, res) => {
                         }
                     }
                     
-                    addLog('MANUAL_TRIGGER_FUNNEL_START', `Disparando funil ${triggeredFunnelId}`, 
-                        { requestId, phoneKey, instanceName, phrase: messageText }, LOG_LEVELS.INFO);
-                    
+                    // CRÍTICO: Setar sticky instance ANTES de iniciar o funil
                     if (instanceName && INSTANCES.includes(instanceName)) {
                         stickyInstances.set(phoneKey, instanceName);
-                        addLog('STICKY_INSTANCE_SET', `Sticky: ${instanceName}`, 
-                            { requestId, phoneKey }, LOG_LEVELS.DEBUG);
+                        addLog('STICKY_INSTANCE_SET_MANUAL', `Sticky fixada em: ${instanceName}`, 
+                            { requestId, phoneKey }, LOG_LEVELS.INFO);
+                    } else if (instanceName) {
+                        addLog('STICKY_INSTANCE_NOT_SET', `Instância não encontrada: "${instanceName}"`, 
+                            { requestId, phoneKey, availableInstances: INSTANCES }, LOG_LEVELS.WARNING);
                     }
+                    
+                    addLog('MANUAL_TRIGGER_FUNNEL_START', `Disparando funil ${triggeredFunnelId}`, 
+                        { requestId, phoneKey, instanceName, phrase: messageText }, LOG_LEVELS.INFO);
                     
                     await startFunnel(
                         phoneKey, 
@@ -1128,14 +1237,18 @@ app.post('/webhook/evolution', async (req, res) => {
                     const funnel = funis.get(triggeredFunnelId);
                     
                     if (funnel && funnel.steps && funnel.steps.length > 0) {
-                        addLog('PHRASE_FUNNEL_START', `Iniciando funil ${triggeredFunnelId}`, 
-                            { requestId, phoneKey, instanceName }, LOG_LEVELS.INFO);
-                        
+                        // CRÍTICO: Setar sticky instance ANTES de iniciar o funil
                         if (instanceName && INSTANCES.includes(instanceName)) {
                             stickyInstances.set(phoneKey, instanceName);
-                            addLog('STICKY_INSTANCE_SET', `Sticky: ${instanceName}`, 
-                                { requestId, phoneKey }, LOG_LEVELS.DEBUG);
+                            addLog('STICKY_INSTANCE_SET_PHRASE', `Sticky fixada em: ${instanceName}`, 
+                                { requestId, phoneKey }, LOG_LEVELS.INFO);
+                        } else if (instanceName) {
+                            addLog('STICKY_INSTANCE_NOT_SET_PHRASE', `Instância não encontrada: "${instanceName}"`, 
+                                { requestId, phoneKey, availableInstances: INSTANCES }, LOG_LEVELS.WARNING);
                         }
+                        
+                        addLog('PHRASE_FUNNEL_START', `Iniciando funil ${triggeredFunnelId}`, 
+                            { requestId, phoneKey, instanceName }, LOG_LEVELS.INFO);
                         
                         await startFunnel(
                             phoneKey, 
@@ -1670,6 +1783,7 @@ app.listen(PORT, async () => {
     console.log('');
     console.log('📡 Endpoints:');
     console.log('  POST /webhook/kirvano           - Eventos Kirvano');
+    console.log('  POST /webhook/perfect           - Eventos PerfectPay');
     console.log('  POST /webhook/evolution         - Mensagens WhatsApp');
     console.log('  GET  /api/manual-triggers       - Listar frases manuais');
     console.log('  POST /api/manual-triggers       - Criar frase manual');
