@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kirvano V5.3 - Sistema Completo de Funis</title>
+    <title>Kirvano V6.0 - Sistema Completo de Funis</title>
     <style>
         * {
             margin: 0;
@@ -581,8 +581,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Kirvano - Sistema Completo de Funis <span class="version-badge">v5.3</span></h1>
-            <p>Sistema unificado: Funis Kirvano + Funis por Frase-Chave + Disparo Manual | 15 Instâncias Ativas</p>
+            <h1>Kirvano - Sistema Completo de Funis <span class="version-badge">v6.0</span></h1>
+            <p>Sistema unificado: Funis por Webhooks + Frases-Chave + Envio Manual + Campanhas em Lote | 15 Instâncias Ativas</p>
             
             <div class="stats-grid">
                 <div class="stat-card highlight">
@@ -617,7 +617,7 @@
             <div class="main-tabs">
                 <button class="main-tab active" onclick="switchMainTab('editor')">Editor de Funis</button>
                 <button class="main-tab" onclick="switchMainTab('phrases')">Funis por Frase</button>
-                <button class="main-tab" onclick="switchMainTab('remarketing')">Remarketing</button>
+                <button class="main-tab" onclick="switchMainTab('remarketing')">Campanhas</button>
                 <button class="main-tab" onclick="switchMainTab('events')">Conversas</button>
             </div>
 
@@ -723,22 +723,58 @@
 
                     <hr style="margin: 40px 0; border: none; border-top: 2px solid #e5e7eb;">
 
-                    <!-- 🆕 NOVO: Frases de Disparo Manual -->
+                    <!-- 🆕 ENVIO ÚNICO MANUAL -->
                     <div class="phrases-header">
-                        <h2>🎯 Frases de Disparo Manual (Você → Cliente)</h2>
-                        <button class="btn btn-success" onclick="openManualTriggerModal()">+ Adicionar Frase de Disparo</button>
+                        <h2>📤 Envio Único Manual</h2>
                     </div>
 
-                    <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                        <p style="color: #92400e; margin: 0; font-size: 14px;">
-                            <strong>💡 Como funciona:</strong> Quando VOCÊ enviar uma dessas frases para um cliente no WhatsApp, o sistema automaticamente dispara o funil configurado. Exemplo: você envia "oiie bb" e o funil começa.
+                    <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+                        <p style="color: #1e40af; margin: 0; font-size: 14px;">
+                            <strong>💡 Como funciona:</strong> Envie um funil manualmente para um número específico escolhendo a instância que irá disparar.
                         </p>
                     </div>
                     
-                    <div id="manualTriggersListContainer">
-                        <div class="empty-workspace">
-                            <h3>Nenhuma frase de disparo cadastrada</h3>
-                            <p>Clique em "Adicionar Frase de Disparo" para começar</p>
+                    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
+                        <div style="display: grid; gap: 16px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #374151;">Número do Cliente</label>
+                                <input type="text" id="singleSendPhone" placeholder="5575981734444" 
+                                    style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                                <small style="color: #6b7280; display: block; margin-top: 4px;">Digite o número com DDD (ex: 5575981734444)</small>
+                            </div>
+                            
+                            <div>
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #374151;">Funil</label>
+                                <select id="singleSendFunnel" style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                                    <option value="">Selecione um funil</option>
+                                </select>
+                            </div>
+                            
+                            <div>
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #374151;">Instância</label>
+                                <select id="singleSendInstance" style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                                    <option value="">Selecione uma instância</option>
+                                    <option value="GABY01">GABY01</option>
+                                    <option value="GABY02">GABY02</option>
+                                    <option value="GABY03">GABY03</option>
+                                    <option value="GABY04">GABY04</option>
+                                    <option value="GABY05">GABY05</option>
+                                    <option value="GABY06">GABY06</option>
+                                    <option value="GABY07">GABY07</option>
+                                    <option value="GABY08">GABY08</option>
+                                    <option value="GABY09">GABY09</option>
+                                    <option value="GABY10">GABY10</option>
+                                    <option value="GABY11">GABY11</option>
+                                    <option value="GABY12">GABY12</option>
+                                    <option value="GABY13">GABY13</option>
+                                    <option value="GABY14">GABY14</option>
+                                    <option value="GABY15">GABY15</option>
+                                </select>
+                            </div>
+                            
+                            <button class="btn btn-success" onclick="sendSingleFunnel()" style="padding: 14px; font-size: 16px;">
+                                🚀 Enviar Agora
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -748,67 +784,81 @@
             <div id="remarketing" class="tab-content">
                 <div style="padding: 24px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-                        <h2 style="margin: 0;">Campanhas de Remarketing</h2>
-                        <button class="btn" onclick="showNewCampaignForm()">+ Nova Campanha</button>
+                        <h2 style="margin: 0;">📨 Campanhas de Envio em Lote</h2>
+                        <button class="btn btn-success" onclick="showNewCampaignForm()">+ Nova Campanha</button>
+                    </div>
+
+                    <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                        <p style="color: #1e40af; margin: 0; font-size: 14px;">
+                            <strong>💡 Como funciona:</strong> Crie campanhas para enviar funis em lote com delay entre envios. Você escolhe UMA instância fixa, define o delay e controla quando iniciar/pausar.
+                        </p>
                     </div>
 
                     <!-- Formulário Nova Campanha -->
-                    <div id="newCampaignForm" style="display: none; background: #f8fafc; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
-                        <h3 style="margin-bottom: 20px;">Nova Campanha de Remarketing</h3>
+                    <div id="newCampaignForm" style="display: none; background: white; border: 1px solid #e5e7eb; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
+                        <h3 style="margin-bottom: 20px;">📨 Nova Campanha de Envio em Lote</h3>
                         
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                        <div style="display: grid; gap: 16px;">
                             <div>
                                 <label style="display: block; font-weight: 600; margin-bottom: 8px;">Nome da Campanha</label>
-                                <input type="text" id="campaignName" placeholder="Ex: Black Friday 2025" 
-                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                                <input type="text" id="campaignName" placeholder="Ex: Recuperação de Carrinho" 
+                                    style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;">
                             </div>
-                            <div>
-                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Funil</label>
-                                <select id="campaignFunnel" style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
-                                    <option value="">Selecione um funil...</option>
-                                </select>
-                            </div>
-                        </div>
 
-                        <div style="margin-bottom: 16px;">
-                            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Lista de Telefones (um por linha)</label>
-                            <textarea id="campaignPhones" placeholder="5575981734444&#10;75981234567&#10;11987654321"
-                                style="width: 100%; min-height: 150px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-family: monospace;"></textarea>
-                        </div>
+                            <div>
+                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Lista de Telefones (um por linha)</label>
+                                <textarea id="campaignPhones" placeholder="5575981734444&#10;5575981864504&#10;5575992346285"
+                                    style="width: 100%; min-height: 150px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-family: monospace; font-size: 13px;"></textarea>
+                                <small style="color: #6b7280; display: block; margin-top: 4px;">Digite um número por linha (ex: 5575981734444)</small>
+                            </div>
 
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px;">
-                            <div>
-                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Horário Início</label>
-                                <input type="time" id="campaignStartTime" value="07:00"
-                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <div>
+                                    <label style="display: block; font-weight: 600; margin-bottom: 8px;">Funil</label>
+                                    <select id="campaignFunnel" style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                        <option value="">Selecione um funil</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-weight: 600; margin-bottom: 8px;">Instância</label>
+                                    <select id="campaignInstance" style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                        <option value="">Selecione uma instância</option>
+                                        <option value="GABY01">GABY01</option>
+                                        <option value="GABY02">GABY02</option>
+                                        <option value="GABY03">GABY03</option>
+                                        <option value="GABY04">GABY04</option>
+                                        <option value="GABY05">GABY05</option>
+                                        <option value="GABY06">GABY06</option>
+                                        <option value="GABY07">GABY07</option>
+                                        <option value="GABY08">GABY08</option>
+                                        <option value="GABY09">GABY09</option>
+                                        <option value="GABY10">GABY10</option>
+                                        <option value="GABY11">GABY11</option>
+                                        <option value="GABY12">GABY12</option>
+                                        <option value="GABY13">GABY13</option>
+                                        <option value="GABY14">GABY14</option>
+                                        <option value="GABY15">GABY15</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div>
-                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Horário Fim</label>
-                                <input type="time" id="campaignEndTime" value="22:00"
-                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
-                            </div>
-                            <div>
-                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Mín (min)</label>
-                                <input type="number" id="campaignDelayMin" value="30" min="1"
-                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
-                            </div>
-                            <div>
-                                <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Máx (min)</label>
-                                <input type="number" id="campaignDelayMax" value="55" min="1"
-                                    style="width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
-                            </div>
-                        </div>
 
-                        <div style="margin-bottom: 16px;">
-                            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Limite por Instância/Dia</label>
-                            <input type="number" id="campaignDailyLimit" value="10" min="1" max="50"
-                                style="width: 200px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px;">
-                            <span style="margin-left: 8px; color: #6b7280;">leads por instância por dia</span>
-                        </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <div>
+                                    <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Mínimo (minutos)</label>
+                                    <input type="number" id="campaignDelayMin" value="45" min="1"
+                                        style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                </div>
+                                <div>
+                                    <label style="display: block; font-weight: 600; margin-bottom: 8px;">Delay Máximo (minutos)</label>
+                                    <input type="number" id="campaignDelayMax" value="60" min="1"
+                                        style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                                </div>
+                            </div>
 
-                        <div style="display: flex; gap: 12px;">
-                            <button class="btn btn-success" onclick="createCampaign()">Criar Campanha</button>
-                            <button class="btn" style="background: #6b7280;" onclick="hideNewCampaignForm()">Cancelar</button>
+                            <div style="display: flex; gap: 12px;">
+                                <button class="btn btn-success" onclick="createCampaign()">Criar Campanha</button>
+                                <button class="btn" style="background: #6b7280;" onclick="hideNewCampaignForm()">Cancelar</button>
+                            </div>
                         </div>
                     </div>
 
@@ -955,9 +1005,13 @@
                 loadEvents();
             } else if (tabName === 'phrases') {
                 loadPhrases();
-                loadManualTriggers(); // 🆕 NOVO
+                if (typeof populateSingleSendFunnels === 'function') {
+                    populateSingleSendFunnels();
+                }
             } else if (tabName === 'remarketing') {
-                loadCampaigns(); // 🆕 NOVO: Carregar campanhas
+                if (typeof loadCampaigns === 'function') {
+                    loadCampaigns();
+                }
             }
         }
 
@@ -1024,6 +1078,26 @@
             
             if (currentManualValue) {
                 manualModalFunnel.value = currentManualValue;
+            }
+
+            // 🔧 CORREÇÃO: Atualizar dropdown de funis no ENVIO ÚNICO MANUAL
+            const singleSendFunnel = document.getElementById('singleSendFunnel');
+            if (singleSendFunnel) {
+                const currentSingleValue = singleSendFunnel.value;
+                singleSendFunnel.innerHTML = '<option value="">Selecione um funil</option>';
+                
+                Object.values(allFunnels).forEach(funnel => {
+                    if (funnel.id.startsWith('PHRASE_') || funnel.id.startsWith('CS_') || funnel.id.startsWith('FB_')) {
+                        const option = document.createElement('option');
+                        option.value = funnel.id;
+                        option.textContent = funnel.name;
+                        singleSendFunnel.appendChild(option);
+                    }
+                });
+                
+                if (currentSingleValue) {
+                    singleSendFunnel.value = currentSingleValue;
+                }
             }
         }
 
@@ -1883,6 +1957,16 @@
             await loadAllFunnels();
             loadDashboard();
             
+            // Aguardar new-functions.js carregar e então popular os selects
+            setTimeout(() => {
+                if (typeof populateSingleSendFunnels === 'function') {
+                    populateSingleSendFunnels();
+                }
+                if (typeof loadCampaigns === 'function') {
+                    loadCampaigns();
+                }
+            }, 500);
+            
             // Atualizar dados periodicamente
             setInterval(() => {
                 loadDashboard();
@@ -1891,7 +1975,10 @@
                     loadEvents();
                 } else if (activeTab.id === 'phrases') {
                     loadPhrases();
-                    loadManualTriggers(); // 🆕 NOVO
+                } else if (activeTab.id === 'remarketing') {
+                    if (typeof loadCampaigns === 'function') {
+                        loadCampaigns();
+                    }
                 }
             }, 10000);
         });
@@ -1920,7 +2007,7 @@
         
         async function loadCampaigns() {
             try {
-                const response = await fetch('/api/remarketing/campaigns');
+                const response = await fetch('/api/campaigns');
                 const result = await response.json();
                 
                 if (result.success) {
@@ -1947,18 +2034,22 @@
 
             container.innerHTML = campaigns.map(campaign => {
                 const statusColors = {
-                    active: '#10b981',
+                    running: '#10b981',
                     paused: '#f59e0b',
                     stopped: '#dc2626',
                     completed: '#6b7280'
                 };
                 
                 const statusLabels = {
-                    active: '🟢 Ativa',
+                    running: '🟢 Rodando',
                     paused: '🟡 Pausada',
                     stopped: '🔴 Parada',
                     completed: '✅ Concluída'
                 };
+                
+                const percentage = campaign.progress.total > 0 
+                    ? Math.round((campaign.progress.sent / campaign.progress.total) * 100) 
+                    : 0;
 
                 return `
                     <div style="background: white; border: 2px solid #e5e7eb; border-radius: 12px; padding: 24px; margin-bottom: 16px;">
@@ -1974,38 +2065,34 @@
                             <div style="display: flex; gap: 8px;">
                                 ${campaign.status === 'paused' ? 
                                     `<button class="btn btn-success btn-small" onclick="startCampaign('${campaign.id}')">▶️ Iniciar</button>` : ''}
-                                ${campaign.status === 'active' ? 
+                                ${campaign.status === 'running' ? 
                                     `<button class="btn btn-small" style="background: #f59e0b;" onclick="pauseCampaign('${campaign.id}')">⏸️ Pausar</button>` : ''}
-                                ${campaign.status === 'active' || campaign.status === 'paused' ? 
+                                ${campaign.status === 'running' || campaign.status === 'paused' ? 
                                     `<button class="btn btn-danger btn-small" onclick="stopCampaign('${campaign.id}')">⏹️ Parar</button>` : ''}
                                 <button class="btn btn-small" onclick="viewCampaignDetails('${campaign.id}')">👁️ Ver</button>
-                                ${campaign.status !== 'active' ? 
+                                ${campaign.status !== 'running' ? 
                                     `<button class="btn btn-danger btn-small" onclick="deleteCampaign('${campaign.id}')">🗑️</button>` : ''}
                             </div>
                         </div>
 
                         <!-- Barra de Progresso -->
                         <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
-                            <div style="background: #667eea; height: 100%; width: ${campaign.progress.percentage}%; transition: width 0.3s;"></div>
+                            <div style="background: #667eea; height: 100%; width: ${percentage}%; transition: width 0.3s;"></div>
                         </div>
-                        <div style="font-size: 12px; color: #6b7280; text-align: right;">${campaign.progress.percentage}% completo</div>
+                        <div style="font-size: 12px; color: #6b7280; text-align: right;">${percentage}% completo</div>
                         
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; font-size: 13px;">
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; font-size: 13px;">
                             <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
                                 <div style="color: #6b7280;">Funil</div>
                                 <div style="font-weight: 600; color: #1f2937;">${campaign.funnelId}</div>
                             </div>
                             <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
-                                <div style="color: #6b7280;">Horário</div>
-                                <div style="font-weight: 600; color: #1f2937;">${String(campaign.schedule.startHour).padStart(2,'0')}:${String(campaign.schedule.startMin).padStart(2,'0')} - ${String(campaign.schedule.endHour).padStart(2,'0')}:${String(campaign.schedule.endMin).padStart(2,'0')}</div>
+                                <div style="color: #6b7280;">Instância</div>
+                                <div style="font-weight: 600; color: #1f2937;">${campaign.instanceName || 'N/A'}</div>
                             </div>
                             <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
                                 <div style="color: #6b7280;">Delay</div>
                                 <div style="font-weight: 600; color: #1f2937;">${campaign.delayMin}-${campaign.delayMax} min</div>
-                            </div>
-                            <div style="background: #f8fafc; padding: 8px; border-radius: 6px;">
-                                <div style="color: #6b7280;">Limite/Dia</div>
-                                <div style="font-weight: 600; color: #1f2937;">${campaign.dailyLimitPerInstance} leads</div>
                             </div>
                         </div>
                     </div>
@@ -2035,14 +2122,12 @@
         async function createCampaign() {
             const name = document.getElementById('campaignName').value.trim();
             const funnelId = document.getElementById('campaignFunnel').value;
+            const instanceId = document.getElementById('campaignInstance').value;
             const phoneList = document.getElementById('campaignPhones').value.trim();
-            const startTime = document.getElementById('campaignStartTime').value;
-            const endTime = document.getElementById('campaignEndTime').value;
             const delayMin = parseInt(document.getElementById('campaignDelayMin').value);
             const delayMax = parseInt(document.getElementById('campaignDelayMax').value);
-            const dailyLimit = parseInt(document.getElementById('campaignDailyLimit').value);
 
-            if (!name || !funnelId || !phoneList) {
+            if (!name || !funnelId || !phoneList || !instanceId) {
                 alert('⚠️ Preencha todos os campos obrigatórios!');
                 return;
             }
@@ -2052,21 +2137,17 @@
                 return;
             }
 
-            const [startHour, startMin] = startTime.split(':').map(Number);
-            const [endHour, endMin] = endTime.split(':').map(Number);
-
             try {
-                const response = await fetch('/api/remarketing/campaigns', {
+                const response = await fetch('/api/campaigns', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         name,
                         funnelId,
+                        instanceName: instanceId,
                         phoneList,
-                        schedule: { startHour, startMin, endHour, endMin },
                         delayMin,
-                        delayMax,
-                        dailyLimitPerInstance: dailyLimit
+                        delayMax
                     })
                 });
 
@@ -2074,9 +2155,9 @@
 
                 if (result.success) {
                     let msg = `✅ Campanha "${name}" criada com sucesso!\n\n`;
-                    msg += `✅ ${result.campaign.leads.length} números válidos\n`;
-                    if (result.invalidPhones && result.invalidPhones.length > 0) {
-                        msg += `⚠️ ${result.invalidPhones.length} números inválidos foram ignorados`;
+                    msg += `✅ ${result.validPhones} números válidos\n`;
+                    if (result.invalidPhones > 0) {
+                        msg += `⚠️ ${result.invalidPhones} números inválidos foram ignorados`;
                     }
                     alert(msg);
                     hideNewCampaignForm();
@@ -2100,8 +2181,8 @@
             }
 
             try {
-                const response = await fetch(`/api/remarketing/campaigns/${id}/start`, {
-                    method: 'PUT'
+                const response = await fetch(`/api/campaigns/${id}/start`, {
+                    method: 'POST'
                 });
 
                 const result = await response.json();
@@ -2120,8 +2201,8 @@
 
         async function pauseCampaign(id) {
             try {
-                const response = await fetch(`/api/remarketing/campaigns/${id}/pause`, {
-                    method: 'PUT'
+                const response = await fetch(`/api/campaigns/${id}/pause`, {
+                    method: 'POST'
                 });
 
                 const result = await response.json();
@@ -2144,8 +2225,8 @@
             }
 
             try {
-                const response = await fetch(`/api/remarketing/campaigns/${id}/stop`, {
-                    method: 'PUT'
+                const response = await fetch(`/api/campaigns/${id}/pause`, {
+                    method: 'POST'
                 });
 
                 const result = await response.json();
@@ -2168,7 +2249,7 @@
             }
 
             try {
-                const response = await fetch(`/api/remarketing/campaigns/${id}`, {
+                const response = await fetch(`/api/campaigns/${id}`, {
                     method: 'DELETE'
                 });
 
@@ -2188,12 +2269,11 @@
 
         async function viewCampaignDetails(id) {
             try {
-                const response = await fetch(`/api/remarketing/campaigns/${id}/status`);
+                const response = await fetch(`/api/campaigns/${id}`);
                 const result = await response.json();
 
                 if (result.success) {
-                    const campaign = result.campaign;
-                    const instances = result.instancesStatus;
+                    const campaign = result.data;
 
                     document.getElementById('modalCampaignName').textContent = campaign.name;
                     
@@ -2213,32 +2293,26 @@
                             </div>
                         </div>
 
-                        <h3 style="margin-bottom: 16px;">Status das Instâncias</h3>
-                        <div style="max-height: 400px; overflow-y: auto;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                <thead style="position: sticky; top: 0; background: white;">
-                                    <tr style="background: #f8fafc;">
-                                        <th style="padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb;">Instância</th>
-                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Enviados Hoje</th>
-                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Status</th>
-                                        <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb;">Último Envio</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${instances.map(inst => `
-                                        <tr style="border-bottom: 1px solid #e5e7eb;">
-                                            <td style="padding: 12px; font-weight: 600;">${inst.name}</td>
-                                            <td style="padding: 12px; text-align: center;">${inst.sentToday}/${inst.limit}</td>
-                                            <td style="padding: 12px; text-align: center;">
-                                                ${inst.available ? '🟢 Disponível' : '🔴 Limite'}
-                                            </td>
-                                            <td style="padding: 12px; text-align: center; font-size: 12px; color: #6b7280;">
-                                                ${inst.lastSend ? new Date(inst.lastSend).toLocaleTimeString('pt-BR') : '-'}
-                                            </td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
+                        <h3 style="margin-bottom: 16px;">Detalhes da Campanha</h3>
+                        <div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                            <p><strong>Instância:</strong> ${campaign.instanceId}</p>
+                            <p><strong>Funil:</strong> ${campaign.funnelId}</p>
+                            <p><strong>Delay:</strong> ${campaign.delayMin}-${campaign.delayMax} minutos</p>
+                            <p><strong>Total de leads:</strong> ${campaign.progress.total}</p>
+                            <p><strong>Status:</strong> ${campaign.status === 'running' ? '🟢 Rodando' : campaign.status === 'paused' ? '⏸️ Pausada' : '⏹️ Parada'}</p>
+                        </div>
+
+                        <h3 style="margin-bottom: 16px;">Últimos Leads Enviados</h3>
+                        <div style="max-height: 300px; overflow-y: auto; background: #f8fafc; padding: 12px; border-radius: 8px;">
+                            ${campaign.leadsSent && campaign.leadsSent.length > 0 
+                                ? campaign.leadsSent.slice(-10).reverse().map(lead => `
+                                    <div style="padding: 8px; border-bottom: 1px solid #e5e7eb;">
+                                        <span style="font-weight: 600;">${lead.phone}</span> - 
+                                        <span style="color: #6b7280; font-size: 12px;">${new Date(lead.sentAt).toLocaleString('pt-BR')}</span>
+                                    </div>
+                                `).join('')
+                                : '<p style="color: #6b7280; text-align: center; padding: 20px;">Nenhum lead enviado ainda</p>'
+                            }
                         </div>
                     `;
 
@@ -2272,6 +2346,69 @@
 
         // Iniciar atualizações ao carregar
         startRemarketingUpdates();
+
+        // ============ ENVIO ÚNICO MANUAL ============
+        async function sendSingleFunnel() {
+            const phone = document.getElementById('singleSendPhone').value.trim();
+            const funnelId = document.getElementById('singleSendFunnel').value;
+            const instanceId = document.getElementById('singleSendInstance').value;
+
+            // Validações
+            if (!phone) {
+                alert('⚠️ Digite o número do cliente!');
+                return;
+            }
+
+            if (!funnelId) {
+                alert('⚠️ Selecione um funil!');
+                return;
+            }
+
+            if (!instanceId) {
+                alert('⚠️ Selecione uma instância!');
+                return;
+            }
+
+            // Validar formato do número
+            const phoneClean = phone.replace(/\D/g, '');
+            if (phoneClean.length < 10 || phoneClean.length > 13) {
+                alert('⚠️ Número inválido! Use o formato: 5575981734444');
+                return;
+            }
+
+            // Confirmar envio
+            if (!confirm(`Enviar funil "${funnelId}" para ${phone} via ${instanceId}?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/send-single', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone: phoneClean,
+                        funnelId: funnelId,
+                        instanceName: instanceId
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('✅ Funil enviado com sucesso!');
+                    // Limpar campos
+                    document.getElementById('singleSendPhone').value = '';
+                    document.getElementById('singleSendFunnel').value = '';
+                    document.getElementById('singleSendInstance').value = '';
+                } else {
+                    alert('❌ Erro: ' + (result.error || 'Erro ao enviar funil'));
+                }
+            } catch (error) {
+                console.error('Erro ao enviar funil:', error);
+                alert('❌ Erro ao enviar funil: ' + error.message);
+            }
+        }
     </script>
+    <script src="/new-functions.js"></script>
 </body>
 </html>
