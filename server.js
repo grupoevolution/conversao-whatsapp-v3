@@ -15,8 +15,7 @@ const DATA_FILE = path.join(__dirname, 'data', 'funnels.json');
 const CONVERSATIONS_FILE = path.join(__dirname, 'data', 'conversations.json');
 const PHRASES_FILE = path.join(__dirname, 'data', 'phrases.json');
 const LOGS_FILE = path.join(__dirname, 'data', 'logs.json');
-const MANUAL_TRIGGERS_FILE = path.join(__dirname, 'data', 'manual_triggers.json');
-const REMARKETING_FILE = path.join(__dirname, 'data', 'remarketing.json');
+const CAMPAIGNS_FILE = path.join(__dirname, 'data', 'campaigns.json');
 
 // Produtos CS e FB
 const PRODUCT_MAPPING = {
@@ -44,21 +43,14 @@ let conversations = new Map();
 let phoneIndex = new Map();
 let stickyInstances = new Map();
 let pixTimeouts = new Map();
-let delayTimers = new Map(); // Armazenar timers de delay dos steps
 let webhookLocks = new Map();
 let logs = [];
 let funis = new Map();
 let lastSuccessfulInstanceIndex = -1;
 let phraseTriggers = new Map();
 let phraseCooldowns = new Map();
-let manualTriggers = new Map();
-let processedMessageIds = new Map(); // Rastrear mensagens já processadas
-
-// ============ REMARKETING ============
-let remarketingCampaigns = new Map();
-let remarketingScheduler = null;
-let remarketingInstanceCounters = new Map(); // Contador de envios por instância hoje
-let remarketingInstanceLastSend = new Map(); // Último envio de cada instância
+let batchCampaigns = new Map(); // Campanhas de envio em lote
+let campaignTimers = new Map(); // Timers ativos das campanhas
 
 const LOG_LEVELS = {
     DEBUG: 'DEBUG',
@@ -233,38 +225,31 @@ async function loadPhrasesFromFile() {
     }
 }
 
-async function saveManualTriggersToFile() {
+async function saveCampaignsToFile() {
     try {
         await ensureDataDir();
-        const triggersArray = Array.from(manualTriggers.entries()).map(([phrase, data]) => ({
-            phrase,
-            funnelId: data.funnelId,
-            active: data.active,
-            triggerCount: data.triggerCount
-        }));
-        await fs.writeFile(MANUAL_TRIGGERS_FILE, JSON.stringify(triggersArray, null, 2));
-        addLog('MANUAL_TRIGGERS_SAVE', `Frases manuais salvas: ${triggersArray.length}`, null, LOG_LEVELS.DEBUG);
+        const campaignsArray = Array.from(batchCampaigns.values());
+        await fs.writeFile(CAMPAIGNS_FILE, JSON.stringify(campaignsArray, null, 2));
+        addLog('CAMPAIGNS_SAVE', `Campanhas salvas: ${campaignsArray.length}`, null, LOG_LEVELS.DEBUG);
     } catch (error) {
-        addLog('MANUAL_TRIGGERS_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
+        addLog('CAMPAIGNS_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
     }
 }
 
-async function loadManualTriggersFromFile() {
+async function loadCampaignsFromFile() {
     try {
-        const data = await fs.readFile(MANUAL_TRIGGERS_FILE, 'utf8');
-        const triggersArray = JSON.parse(data);
-        manualTriggers.clear();
-        triggersArray.forEach(item => {
-            manualTriggers.set(item.phrase, {
-                funnelId: item.funnelId,
-                active: item.active !== false,
-                triggerCount: item.triggerCount || 0
-            });
+        const data = await fs.readFile(CAMPAIGNS_FILE, 'utf8');
+        const campaignsArray = JSON.parse(data);
+        batchCampaigns.clear();
+        
+        campaignsArray.forEach(campaign => {
+            batchCampaigns.set(campaign.id, campaign);
         });
-        addLog('MANUAL_TRIGGERS_LOAD', `Frases manuais carregadas: ${manualTriggers.size}`, null, LOG_LEVELS.INFO);
+        
+        addLog('CAMPAIGNS_LOAD', `Campanhas carregadas: ${batchCampaigns.size}`, null, LOG_LEVELS.INFO);
         return true;
     } catch (error) {
-        addLog('MANUAL_TRIGGERS_LOAD_ERROR', 'Nenhuma frase manual cadastrada', null, LOG_LEVELS.DEBUG);
+        addLog('CAMPAIGNS_LOAD_ERROR', 'Nenhuma campanha anterior', null, LOG_LEVELS.DEBUG);
         return false;
     }
 }
@@ -325,7 +310,7 @@ setInterval(async () => {
     await saveFunnelsToFile();
     await saveConversationsToFile();
     await savePhrasesToFile();
-    await saveManualTriggersToFile();
+    await saveCampaignsToFile();
     await saveLogsToFile();
 }, 30000);
 
@@ -450,37 +435,6 @@ function checkPhraseTrigger(phoneKey, messageText) {
     
     addLog('PHRASE_NOT_FOUND', `Nenhuma frase correspondente`, 
         { phoneKey, message: normalizedMessage }, LOG_LEVELS.DEBUG);
-    return null;
-}
-
-function checkManualTrigger(messageText, phoneKey) {
-    const normalizedMessage = messageText.toLowerCase().trim();
-    
-    addLog('MANUAL_TRIGGER_CHECK', `Verificando frase manual: "${normalizedMessage}"`, 
-        { original: messageText }, LOG_LEVELS.DEBUG);
-    
-    for (const [phrase, data] of manualTriggers.entries()) {
-        if (!data.active) {
-            continue;
-        }
-        
-        const normalizedPhrase = phrase.toLowerCase().trim();
-        
-        if (normalizedMessage.includes(normalizedPhrase)) {
-            addLog('MANUAL_TRIGGER_DETECTED', `Frase manual detectada: "${phrase}"`, 
-                { funnelId: data.funnelId }, LOG_LEVELS.INFO);
-            
-            // Registrar o disparo
-            data.triggerCount = (data.triggerCount || 0) + 1;
-            manualTriggers.set(phrase, data);
-            saveManualTriggersToFile();
-            
-            return data.funnelId;
-        }
-    }
-    
-    addLog('MANUAL_TRIGGER_NOT_FOUND', `Nenhuma frase manual correspondente`, 
-        { message: normalizedMessage }, LOG_LEVELS.DEBUG);
     return null;
 }
 
@@ -782,8 +736,7 @@ async function startFunnel(phoneKey, remoteJid, funnelId, orderCode, customerNam
         lastReply: null,
         canceled: false,
         completed: false,
-        source,
-        executionId: uuidv4() // ID único desta execução do funil
+        source
     };
     
     conversations.set(phoneKey, conversation);
@@ -801,9 +754,6 @@ async function sendStep(phoneKey) {
             { phoneKey }, LOG_LEVELS.ERROR);
         return;
     }
-    
-    // Capturar executionId desta execução
-    const currentExecutionId = conversation.executionId;
     
     if (!validateConversationState(conversation, phoneKey)) {
         addLog('STEP_INVALID_STATE', 'Estado inválido detectado', 
@@ -850,28 +800,12 @@ async function sendStep(phoneKey) {
         addLog('STEP_DELAY_BEFORE', `Aguardando ${delaySeconds}s`, 
             { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-        
-        // Verificar se o funil foi cancelado/trocado durante o delay
-        const updatedConv = conversations.get(phoneKey);
-        if (!updatedConv || updatedConv.executionId !== currentExecutionId) {
-            addLog('STEP_EXECUTION_CANCELED', 'Execução cancelada durante delay', 
-                { phoneKey, oldExecutionId: currentExecutionId }, LOG_LEVELS.WARNING);
-            return;
-        }
     }
     
     if (step.showTyping && step.type !== 'delay') {
         addLog('STEP_SHOW_TYPING', 'Mostrando digitando por 3s', 
             { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // Verificar se o funil foi cancelado/trocado durante o typing
-        const updatedConv = conversations.get(phoneKey);
-        if (!updatedConv || updatedConv.executionId !== currentExecutionId) {
-            addLog('STEP_EXECUTION_CANCELED', 'Execução cancelada durante typing', 
-                { phoneKey, oldExecutionId: currentExecutionId }, LOG_LEVELS.WARNING);
-            return;
-        }
     }
     
     if (step.type === 'delay') {
@@ -879,14 +813,6 @@ async function sendStep(phoneKey) {
         addLog('STEP_DELAY', `Delay de ${delaySeconds}s`, 
             { phoneKey }, LOG_LEVELS.DEBUG);
         await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
-        
-        // Verificar se o funil foi cancelado/trocado durante o delay
-        const updatedConv = conversations.get(phoneKey);
-        if (!updatedConv || updatedConv.executionId !== currentExecutionId) {
-            addLog('STEP_EXECUTION_CANCELED', 'Execução cancelada durante delay de step', 
-                { phoneKey, oldExecutionId: currentExecutionId }, LOG_LEVELS.WARNING);
-            return;
-        }
     } else {
         result = await sendWithFallback(
             phoneKey, 
@@ -973,301 +899,168 @@ async function advanceConversation(phoneKey, replyText, reason) {
     await sendStep(phoneKey);
 }
 
-// ============ SISTEMA DE REMARKETING ============
+// ============ CAMPANHAS EM LOTE ============
 
-async function saveRemarketingToFile() {
-    try {
-        await ensureDataDir();
-        const campaignsArray = Array.from(remarketingCampaigns.values());
-        await fs.writeFile(REMARKETING_FILE, JSON.stringify(campaignsArray, null, 2));
-        addLog('REMARKETING_SAVE', `Campanhas salvas: ${campaignsArray.length}`, null, LOG_LEVELS.DEBUG);
-    } catch (error) {
-        addLog('REMARKETING_SAVE_ERROR', `Erro: ${error.message}`, null, LOG_LEVELS.ERROR);
-    }
-}
-
-async function loadRemarketingFromFile() {
-    try {
-        const data = await fs.readFile(REMARKETING_FILE, 'utf8');
-        const campaignsArray = JSON.parse(data);
-        remarketingCampaigns.clear();
-        
-        campaignsArray.forEach(campaign => {
-            remarketingCampaigns.set(campaign.id, campaign);
-        });
-        
-        addLog('REMARKETING_LOAD', `Campanhas carregadas: ${remarketingCampaigns.size}`, null, LOG_LEVELS.INFO);
-        return true;
-    } catch (error) {
-        addLog('REMARKETING_LOAD_ERROR', 'Nenhuma campanha anterior', null, LOG_LEVELS.DEBUG);
-        return false;
-    }
-}
-
-function normalizePhone(phone) {
-    let cleaned = String(phone).replace(/\D/g, '');
-    
-    if (cleaned.startsWith('55')) {
-        cleaned = cleaned.slice(2);
-    }
-    
-    if (cleaned.length === 10) {
-        cleaned = cleaned.slice(0, 2) + '9' + cleaned.slice(2);
-    }
-    
-    return '55' + cleaned;
-}
-
-function validatePhoneList(phoneList) {
-    const lines = phoneList.split('\n').map(l => l.trim()).filter(l => l);
-    const validPhones = [];
-    const invalidPhones = [];
-    
-    lines.forEach(line => {
-        try {
-            const normalized = normalizePhone(line);
-            if (normalized.length >= 12 && normalized.length <= 13) {
-                validPhones.push(normalized);
-            } else {
-                invalidPhones.push(line);
-            }
-        } catch (error) {
-            invalidPhones.push(line);
-        }
-    });
-    
-    return { validPhones, invalidPhones };
-}
-
-function isWithinTimeRange(startHour, startMin, endHour, endMin) {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const startMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
-    
-    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-}
-
-function resetDailyCountersIfNeeded() {
-    const now = new Date();
-    const today = now.toDateString();
-    
-    if (!resetDailyCountersIfNeeded.lastReset || resetDailyCountersIfNeeded.lastReset !== today) {
-        addLog('REMARKETING_DAILY_RESET', 'Resetando contadores diários', 
-            { date: today }, LOG_LEVELS.INFO);
-        
-        remarketingInstanceCounters.clear();
-        resetDailyCountersIfNeeded.lastReset = today;
-    }
-}
-
-async function sendRemarketingMessage(campaign, phone, instanceName) {
+async function sendSingleFunnel(phone, funnelId, instanceName) {
     const phoneKey = uuidv4();
-    const remoteJid = phone + '@s.whatsapp.net';
+    const normalizedPhone = phone.startsWith('55') ? phone : '55' + phone;
+    const remoteJid = normalizedPhone + '@s.whatsapp.net';
     
     try {
-        addLog('REMARKETING_SEND_START', `Tentando enviar para ${phone}`, 
-            { campaignId: campaign.id, phone, attemptInstance: instanceName }, LOG_LEVELS.INFO);
+        addLog('SINGLE_SEND_START', `Enviando funil para ${phone}`, 
+            { phone, funnelId, instanceName }, LOG_LEVELS.INFO);
         
-        // Setar sticky instance para essa conversa
+        // Setar sticky instance
         stickyInstances.set(phoneKey, instanceName);
         
         // Iniciar funil
         await startFunnel(
             phoneKey,
             remoteJid,
-            campaign.funnelId,
-            `REMARKETING_${campaign.id}_${Date.now()}`,
+            funnelId,
+            `MANUAL_${Date.now()}`,
             'Lead',
-            'REMARKETING',
+            'MANUAL',
             '',
-            'remarketing'
+            'manual'
         );
         
-        // Aguardar um pouco para garantir que o envio foi processado
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        addLog('SINGLE_SEND_SUCCESS', `Funil enviado com sucesso`, 
+            { phone, funnelId, instanceName }, LOG_LEVELS.INFO);
         
-        // Verificar se a conversa foi criada e se teve erro
-        const conversation = conversations.get(phoneKey);
-        if (!conversation) {
-            throw new Error('Conversa não foi criada');
-        }
-        
-        if (conversation.hasError) {
-            throw new Error(conversation.errorMessage || 'Erro desconhecido no envio');
-        }
-        
-        // Descobrir qual instância realmente enviou (pode ser diferente da tentada)
-        const actualInstance = stickyInstances.get(phoneKey) || instanceName;
-        
-        // Atualizar contadores da instância que realmente enviou
-        const counter = remarketingInstanceCounters.get(actualInstance) || 0;
-        remarketingInstanceCounters.set(actualInstance, counter + 1);
-        remarketingInstanceLastSend.set(actualInstance, Date.now());
-        
-        // Atualizar campanha
-        campaign.leadsSent.push({
-            phone,
-            attemptedInstance: instanceName,
-            actualInstance: actualInstance,
-            sentAt: new Date().toISOString(),
-            status: 'sent'
-        });
-        
-        campaign.progress.sent++;
-        campaign.progress.lastSent = new Date().toISOString();
-        
-        remarketingCampaigns.set(campaign.id, campaign);
-        await saveRemarketingToFile();
-        
-        addLog('REMARKETING_SEND_SUCCESS', `Enviado com sucesso`, 
-            { campaignId: campaign.id, phone, attemptedInstance: instanceName, actualInstance }, 
-            LOG_LEVELS.INFO);
-        
-        return { success: true, actualInstance };
+        return { success: true };
         
     } catch (error) {
-        addLog('REMARKETING_SEND_ERROR', `Erro no envio: ${error.message}`, 
-            { campaignId: campaign.id, phone, instanceName, error: error.message }, LOG_LEVELS.ERROR);
-        
-        campaign.leadsSent.push({
-            phone,
-            instanceName,
-            sentAt: new Date().toISOString(),
-            status: 'error',
-            error: error.message
-        });
-        
-        campaign.progress.errors++;
-        remarketingCampaigns.set(campaign.id, campaign);
-        await saveRemarketingToFile();
+        addLog('SINGLE_SEND_ERROR', `Erro no envio: ${error.message}`, 
+            { phone, funnelId, instanceName, error: error.message }, LOG_LEVELS.ERROR);
         
         return { success: false, error: error.message };
     }
 }
 
-async function processRemarketingCampaigns() {
-    resetDailyCountersIfNeeded();
+async function processCampaign(campaignId) {
+    const campaign = batchCampaigns.get(campaignId);
     
-    for (const [campaignId, campaign] of remarketingCampaigns.entries()) {
-        if (campaign.status !== 'active') continue;
+    if (!campaign || campaign.status !== 'running') {
+        return;
+    }
+    
+    // Verificar se há leads pendentes
+    if (campaign.progress.sent >= campaign.leads.length) {
+        campaign.status = 'completed';
+        campaign.progress.completedAt = new Date().toISOString();
+        batchCampaigns.set(campaignId, campaign);
+        await saveCampaignsToFile();
         
-        // Verificar horário
-        const { startHour, startMin, endHour, endMin } = campaign.schedule;
-        if (!isWithinTimeRange(startHour, startMin, endHour, endMin)) {
-            continue;
+        // Limpar timer
+        if (campaignTimers.has(campaignId)) {
+            clearTimeout(campaignTimers.get(campaignId));
+            campaignTimers.delete(campaignId);
         }
         
-        // Verificar se há leads pendentes
-        if (campaign.progress.sent >= campaign.leads.length) {
-            campaign.status = 'completed';
-            campaign.progress.completedAt = new Date().toISOString();
-            remarketingCampaigns.set(campaignId, campaign);
-            await saveRemarketingToFile();
-            
-            addLog('REMARKETING_COMPLETED', `Campanha finalizada: ${campaign.name}`, 
-                { campaignId, totalSent: campaign.progress.sent }, LOG_LEVELS.INFO);
-            continue;
-        }
+        addLog('CAMPAIGN_COMPLETED', `Campanha finalizada: ${campaign.name}`, 
+            { campaignId, totalSent: campaign.progress.sent }, LOG_LEVELS.INFO);
+        return;
+    }
+    
+    // Enviar próximo lead
+    const nextPhone = campaign.leads[campaign.progress.sent];
+    const phoneKey = extractPhoneKey(nextPhone);
+    
+    addLog('CAMPAIGN_SENDING', `Enviando lead ${campaign.progress.sent + 1}/${campaign.leads.length}`, 
+        { campaignId, phone: nextPhone }, LOG_LEVELS.INFO);
+    
+    const result = await sendSingleFunnel(nextPhone, campaign.funnelId, campaign.instanceName);
+    
+    if (result.success) {
+        campaign.leadsSent.push({
+            phone: nextPhone,
+            phoneKey,
+            sentAt: new Date().toISOString(),
+            status: 'sent'
+        });
+        campaign.progress.sent++;
+        campaign.progress.lastSent = new Date().toISOString();
+    } else {
+        campaign.leadsSent.push({
+            phone: nextPhone,
+            phoneKey,
+            sentAt: new Date().toISOString(),
+            status: 'error',
+            error: result.error
+        });
+        campaign.progress.errors++;
+    }
+    
+    batchCampaigns.set(campaignId, campaign);
+    await saveCampaignsToFile();
+    
+    // Agendar próximo envio
+    if (campaign.progress.sent < campaign.leads.length && campaign.status === 'running') {
+        const delayMin = campaign.delayMin + Math.random() * (campaign.delayMax - campaign.delayMin);
+        const delayMs = delayMin * 60 * 1000;
         
-        // Inicializar índice da campanha se não existir
-        if (!campaign.currentInstanceIndex) {
-            campaign.currentInstanceIndex = 0;
-        }
+        addLog('CAMPAIGN_NEXT_SCHEDULED', `Próximo envio em ${Math.round(delayMin)}min`, 
+            { campaignId, nextIndex: campaign.progress.sent }, LOG_LEVELS.INFO);
         
-        // Procurar próxima instância disponível
-        let foundAvailableInstance = false;
-        let attemptedInstances = 0;
+        const timer = setTimeout(() => {
+            processCampaign(campaignId);
+        }, delayMs);
         
-        while (!foundAvailableInstance && attemptedInstances < INSTANCES.length) {
-            const instanceName = INSTANCES[campaign.currentInstanceIndex];
-            
-            // Verificar limite diário
-            const sentToday = remarketingInstanceCounters.get(instanceName) || 0;
-            if (sentToday >= campaign.dailyLimitPerInstance) {
-                addLog('REMARKETING_LIMIT_REACHED', `${instanceName} atingiu limite diário`, 
-                    { instanceName, sentToday, limit: campaign.dailyLimitPerInstance }, LOG_LEVELS.DEBUG);
-                
-                // Avançar para próxima instância
-                campaign.currentInstanceIndex = (campaign.currentInstanceIndex + 1) % INSTANCES.length;
-                attemptedInstances++;
-                continue;
-            }
-            
-            // Verificar cooldown da instância
-            const lastSend = remarketingInstanceLastSend.get(instanceName);
-            if (lastSend) {
-                const minDelay = campaign.delayMin * 60 * 1000;
-                const timeSinceLastSend = Date.now() - lastSend;
-                
-                if (timeSinceLastSend < minDelay) {
-                    const remainingMin = Math.ceil((minDelay - timeSinceLastSend) / 60000);
-                    addLog('REMARKETING_COOLDOWN', `${instanceName} em cooldown (${remainingMin}min restantes)`, 
-                        { instanceName, remainingMin, campaignId }, LOG_LEVELS.DEBUG);
-                    
-                    // Avançar para próxima instância
-                    campaign.currentInstanceIndex = (campaign.currentInstanceIndex + 1) % INSTANCES.length;
-                    attemptedInstances++;
-                    continue;
-                }
-            }
-            
-            // Instância disponível! Tentar enviar
-            const nextPhone = campaign.leads[campaign.progress.sent];
-            
-            addLog('REMARKETING_INSTANCE_SELECTED', `${instanceName} selecionada`, 
-                { instanceName, leadIndex: campaign.progress.sent, phone: nextPhone, campaignId }, 
-                LOG_LEVELS.INFO);
-            
-            const result = await sendRemarketingMessage(campaign, nextPhone, instanceName);
-            
-            if (result.success) {
-                // Sucesso! Avançar para próxima instância na sequência
-                campaign.currentInstanceIndex = (campaign.currentInstanceIndex + 1) % INSTANCES.length;
-                remarketingCampaigns.set(campaignId, campaign);
-                await saveRemarketingToFile();
-                
-                const delayMin = campaign.delayMin + Math.random() * (campaign.delayMax - campaign.delayMin);
-                addLog('REMARKETING_SUCCESS', `Lead enviado. Próxima instância: ${INSTANCES[campaign.currentInstanceIndex]}`, 
-                    { campaignId, instanceName, nextInstance: INSTANCES[campaign.currentInstanceIndex], 
-                      cooldownMin: Math.round(delayMin) }, 
-                    LOG_LEVELS.INFO);
-                
-                foundAvailableInstance = true;
-            } else {
-                // Erro no envio - tentar próxima instância
-                addLog('REMARKETING_INSTANCE_FAILED', `${instanceName} falhou, tentando próxima`, 
-                    { instanceName, error: result.error, campaignId }, LOG_LEVELS.WARNING);
-                
-                // Avançar para próxima instância
-                campaign.currentInstanceIndex = (campaign.currentInstanceIndex + 1) % INSTANCES.length;
-                attemptedInstances++;
-            }
-        }
-        
-        if (!foundAvailableInstance) {
-            addLog('REMARKETING_NO_INSTANCE_AVAILABLE', 
-                `Todas as instâncias estão indisponíveis (cooldown ou limite). Aguardando próximo ciclo.`, 
-                { campaignId, totalInstances: INSTANCES.length }, LOG_LEVELS.WARNING);
-        }
+        campaignTimers.set(campaignId, timer);
     }
 }
 
-function startRemarketingScheduler() {
-    if (remarketingScheduler) {
-        clearInterval(remarketingScheduler);
+function startCampaign(campaignId) {
+    const campaign = batchCampaigns.get(campaignId);
+    
+    if (!campaign) {
+        return { success: false, error: 'Campanha não encontrada' };
     }
     
-    remarketingScheduler = setInterval(() => {
-        processRemarketingCampaigns().catch(error => {
-            addLog('REMARKETING_SCHEDULER_ERROR', `Erro no scheduler: ${error.message}`, 
-                { error: error.stack }, LOG_LEVELS.ERROR);
-        });
-    }, 60000); // Verifica a cada 1 minuto
+    if (campaign.status === 'running') {
+        return { success: false, error: 'Campanha já está rodando' };
+    }
     
-    addLog('REMARKETING_SCHEDULER_START', 'Scheduler de remarketing iniciado', 
-        { interval: '60s' }, LOG_LEVELS.INFO);
+    campaign.status = 'running';
+    campaign.progress.startedAt = new Date().toISOString();
+    batchCampaigns.set(campaignId, campaign);
+    saveCampaignsToFile();
+    
+    addLog('CAMPAIGN_STARTED', `Campanha iniciada: ${campaign.name}`, 
+        { campaignId, totalLeads: campaign.leads.length }, LOG_LEVELS.INFO);
+    
+    // Iniciar processamento imediatamente
+    processCampaign(campaignId);
+    
+    return { success: true };
 }
+
+function pauseCampaign(campaignId) {
+    const campaign = batchCampaigns.get(campaignId);
+    
+    if (!campaign) {
+        return { success: false, error: 'Campanha não encontrada' };
+    }
+    
+    campaign.status = 'paused';
+    campaign.progress.pausedAt = new Date().toISOString();
+    batchCampaigns.set(campaignId, campaign);
+    saveCampaignsToFile();
+    
+    // Limpar timer
+    if (campaignTimers.has(campaignId)) {
+        clearTimeout(campaignTimers.get(campaignId));
+        campaignTimers.delete(campaignId);
+    }
+    
+    addLog('CAMPAIGN_PAUSED', `Campanha pausada: ${campaign.name}`, 
+        { campaignId }, LOG_LEVELS.INFO);
+    
+    return { success: true };
+}
+
+// ============ WEBHOOKS ============
 
 app.post('/webhook/kirvano', async (req, res) => {
     const requestId = Date.now() + Math.random();
@@ -1472,81 +1265,8 @@ app.post('/webhook/evolution', async (req, res) => {
             return res.json({ success: true });
         }
         
+        // Ignorar mensagens enviadas por você (fromMe: true)
         if (fromMe) {
-            addLog('EVOLUTION_FROM_ME', 'Mensagem enviada por você', 
-                { requestId, phoneKey, messageText }, LOG_LEVELS.DEBUG);
-            
-            // Verificar se a mensagem já foi processada (evitar duplicatas da Evolution)
-            const messageId = messageData.key.id;
-            if (messageId && processedMessageIds.has(messageId)) {
-                addLog('EVOLUTION_MESSAGE_DUPLICATE', 'Mensagem já processada, ignorando', 
-                    { requestId, phoneKey, messageId }, LOG_LEVELS.WARNING);
-                return res.json({ success: true, duplicate: true });
-            }
-            
-            // Registrar messageId processado (limpar após 1 hora)
-            if (messageId) {
-                processedMessageIds.set(messageId, Date.now());
-                setTimeout(() => processedMessageIds.delete(messageId), 3600000); // 1 hora
-            }
-            
-            const triggeredFunnelId = checkManualTrigger(messageText, phoneKey);
-            
-            if (triggeredFunnelId) {
-                const funnel = funis.get(triggeredFunnelId);
-                
-                if (funnel && funnel.steps && funnel.steps.length > 0) {
-                    const existingConversation = conversations.get(phoneKey);
-                    
-                    if (existingConversation && !existingConversation.completed && !existingConversation.canceled) {
-                        addLog('MANUAL_TRIGGER_CANCEL_EXISTING', `Cancelando funil atual: ${existingConversation.funnelId}`, 
-                            { requestId, phoneKey, oldFunnel: existingConversation.funnelId, newFunnel: triggeredFunnelId }, 
-                            LOG_LEVELS.WARNING);
-                        
-                        existingConversation.canceled = true;
-                        existingConversation.waiting_for_response = false;
-                        conversations.set(phoneKey, existingConversation);
-                        
-                        if (pixTimeouts.has(phoneKey)) {
-                            clearTimeout(pixTimeouts.get(phoneKey));
-                            pixTimeouts.delete(phoneKey);
-                            addLog('PIX_TIMEOUT_CLEARED', 'Timeout PIX cancelado', 
-                                { phoneKey }, LOG_LEVELS.DEBUG);
-                        }
-                    }
-                    
-                    // CRÍTICO: Setar sticky instance ANTES de iniciar o funil
-                    if (instanceName && INSTANCES.includes(instanceName)) {
-                        stickyInstances.set(phoneKey, instanceName);
-                        addLog('STICKY_INSTANCE_SET_MANUAL', `Sticky fixada em: ${instanceName}`, 
-                            { requestId, phoneKey }, LOG_LEVELS.INFO);
-                    } else if (instanceName) {
-                        addLog('STICKY_INSTANCE_NOT_SET', `Instância não encontrada: "${instanceName}"`, 
-                            { requestId, phoneKey, availableInstances: INSTANCES }, LOG_LEVELS.WARNING);
-                    }
-                    
-                    addLog('MANUAL_TRIGGER_FUNNEL_START', `Disparando funil ${triggeredFunnelId}`, 
-                        { requestId, phoneKey, instanceName, phrase: messageText }, LOG_LEVELS.INFO);
-                    
-                    await startFunnel(
-                        phoneKey, 
-                        remoteJid, 
-                        triggeredFunnelId, 
-                        'MANUAL_' + Date.now(), 
-                        'Cliente', 
-                        'MANUAL', 
-                        '', 
-                        'manual'
-                    );
-                    
-                    return res.json({ success: true, manualTrigger: true });
-                } else {
-                    addLog('MANUAL_TRIGGER_FUNNEL_EMPTY', `Funil ${triggeredFunnelId} vazio`, 
-                        { requestId, phoneKey }, LOG_LEVELS.ERROR);
-                    return res.json({ success: false, error: 'Funil vazio' });
-                }
-            }
-            
             return res.json({ success: true });
         }
         
@@ -1911,307 +1631,225 @@ app.delete('/api/phrases/:phrase', (req, res) => {
     }
 });
 
-app.get('/api/manual-triggers', (req, res) => {
-    const triggersList = Array.from(manualTriggers.entries()).map(([phrase, data]) => ({
-        phrase,
-        funnelId: data.funnelId,
-        active: data.active !== false,
-        triggerCount: data.triggerCount || 0
-    }));
-    res.json({ success: true, data: triggersList });
-});
+// ============ API ENVIO MANUAL ============
 
-app.post('/api/manual-triggers', (req, res) => {
-    const { phrase, funnelId } = req.body;
-    
-    if (!phrase || !funnelId) {
-        return res.status(400).json({ success: false, error: 'Frase e funil são obrigatórios' });
-    }
-    
-    const normalizedPhrase = phrase.trim();
-    
-    if (manualTriggers.has(normalizedPhrase)) {
-        return res.status(400).json({ success: false, error: 'Frase já cadastrada' });
-    }
-    
-    if (!funis.has(funnelId)) {
-        return res.status(400).json({ success: false, error: 'Funil não encontrado' });
-    }
-    
-    manualTriggers.set(normalizedPhrase, {
-        funnelId,
-        active: true,
-        triggerCount: 0
-    });
-    
-    addLog('MANUAL_TRIGGER_ADDED', `Frase manual cadastrada: "${normalizedPhrase}"`, 
-        { funnelId }, LOG_LEVELS.INFO);
-    saveManualTriggersToFile();
-    
-    res.json({ success: true, message: 'Frase de disparo manual cadastrada com sucesso' });
-});
-
-app.put('/api/manual-triggers/:phrase', (req, res) => {
-    const phrase = decodeURIComponent(req.params.phrase);
-    const { funnelId, active } = req.body;
-    
-    if (!manualTriggers.has(phrase)) {
-        return res.status(404).json({ success: false, error: 'Frase não encontrada' });
-    }
-    
-    const data = manualTriggers.get(phrase);
-    
-    if (funnelId !== undefined) {
+// Envio único
+app.post('/api/send-single', async (req, res) => {
+    try {
+        const { phone, funnelId, instanceName } = req.body;
+        
+        if (!phone || !funnelId || !instanceName) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Telefone, funil e instância são obrigatórios' 
+            });
+        }
+        
         if (!funis.has(funnelId)) {
-            return res.status(400).json({ success: false, error: 'Funil não encontrado' });
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Funil não encontrado' 
+            });
         }
-        data.funnelId = funnelId;
+        
+        if (!INSTANCES.includes(instanceName)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Instância inválida' 
+            });
+        }
+        
+        const result = await sendSingleFunnel(phone, funnelId, instanceName);
+        
+        if (result.success) {
+            res.json({ 
+                success: true, 
+                message: 'Funil enviado com sucesso' 
+            });
+        } else {
+            res.status(500).json({ 
+                success: false, 
+                error: result.error 
+            });
+        }
+        
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
     }
-    
-    if (active !== undefined) {
-        data.active = active;
-    }
-    
-    manualTriggers.set(phrase, data);
-    addLog('MANUAL_TRIGGER_UPDATED', `Frase manual atualizada: "${phrase}"`, null, LOG_LEVELS.INFO);
-    saveManualTriggersToFile();
-    
-    res.json({ success: true, message: 'Frase de disparo manual atualizada com sucesso' });
 });
 
-app.delete('/api/manual-triggers/:phrase', (req, res) => {
-    const phrase = decodeURIComponent(req.params.phrase);
-    
-    if (manualTriggers.has(phrase)) {
-        manualTriggers.delete(phrase);
-        addLog('MANUAL_TRIGGER_DELETED', `Frase manual excluída: "${phrase}"`, null, LOG_LEVELS.INFO);
-        saveManualTriggersToFile();
-        res.json({ success: true, message: 'Frase de disparo manual excluída com sucesso' });
-    } else {
-        res.status(404).json({ success: false, error: 'Frase não encontrada' });
-    }
-});
-
-// ============ ROTAS DE REMARKETING ============
-
-app.get('/api/remarketing/campaigns', (req, res) => {
-    const campaignsList = Array.from(remarketingCampaigns.values()).map(campaign => ({
+// Listar campanhas
+app.get('/api/campaigns', (req, res) => {
+    const campaignsList = Array.from(batchCampaigns.values()).map(campaign => ({
         ...campaign,
-        progress: {
-            ...campaign.progress,
-            percentage: campaign.leads.length > 0 
-                ? Math.round((campaign.progress.sent / campaign.leads.length) * 100) 
-                : 0
-        }
+        leadsCount: campaign.leads.length,
+        leads: undefined // Não enviar lista completa
     }));
-    
-    campaignsList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
     res.json({ success: true, data: campaignsList });
 });
 
-app.post('/api/remarketing/campaigns', (req, res) => {
-    const { name, funnelId, phoneList, schedule, delayMin, delayMax, dailyLimitPerInstance } = req.body;
+// Função para validar lista de telefones
+function validatePhoneList(phoneList) {
+    const phones = phoneList.split('\n').map(p => p.trim()).filter(p => p.length > 0);
+    const validPhones = [];
+    const invalidPhones = [];
     
-    if (!name || !funnelId || !phoneList) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Nome, funil e lista de telefones são obrigatórios' 
-        });
-    }
-    
-    if (!funis.has(funnelId)) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Funil não encontrado' 
-        });
-    }
-    
-    // Validar lista de telefones
-    const { validPhones, invalidPhones } = validatePhoneList(phoneList);
-    
-    if (validPhones.length === 0) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Nenhum telefone válido encontrado',
-            invalidPhones 
-        });
-    }
-    
-    // Criar campanha
-    const campaignId = 'CAMP_' + Date.now();
-    const campaign = {
-        id: campaignId,
-        name: name.trim(),
-        funnelId,
-        leads: validPhones,
-        leadsSent: [],
-        schedule: {
-            startHour: schedule.startHour || 7,
-            startMin: schedule.startMin || 0,
-            endHour: schedule.endHour || 22,
-            endMin: schedule.endMin || 0
-        },
-        delayMin: delayMin || 30,
-        delayMax: delayMax || 55,
-        dailyLimitPerInstance: dailyLimitPerInstance || 10,
-        status: 'paused',
-        createdAt: new Date().toISOString(),
-        progress: {
-            sent: 0,
-            errors: 0,
-            total: validPhones.length,
-            lastSent: null,
-            completedAt: null
-        }
-    };
-    
-    remarketingCampaigns.set(campaignId, campaign);
-    saveRemarketingToFile();
-    
-    addLog('REMARKETING_CREATED', `Campanha criada: ${name}`, 
-        { campaignId, totalLeads: validPhones.length, invalidCount: invalidPhones.length }, 
-        LOG_LEVELS.INFO);
-    
-    res.json({ 
-        success: true, 
-        message: 'Campanha criada com sucesso',
-        campaign,
-        invalidPhones
-    });
-});
-
-app.put('/api/remarketing/campaigns/:id/start', (req, res) => {
-    const { id } = req.params;
-    const campaign = remarketingCampaigns.get(id);
-    
-    if (!campaign) {
-        return res.status(404).json({ success: false, error: 'Campanha não encontrada' });
-    }
-    
-    if (campaign.status === 'completed') {
-        return res.status(400).json({ success: false, error: 'Campanha já foi concluída' });
-    }
-    
-    campaign.status = 'active';
-    campaign.progress.startedAt = campaign.progress.startedAt || new Date().toISOString();
-    remarketingCampaigns.set(id, campaign);
-    saveRemarketingToFile();
-    
-    addLog('REMARKETING_STARTED', `Campanha iniciada: ${campaign.name}`, 
-        { campaignId: id }, LOG_LEVELS.INFO);
-    
-    res.json({ success: true, message: 'Campanha iniciada', campaign });
-});
-
-app.put('/api/remarketing/campaigns/:id/pause', (req, res) => {
-    const { id } = req.params;
-    const campaign = remarketingCampaigns.get(id);
-    
-    if (!campaign) {
-        return res.status(404).json({ success: false, error: 'Campanha não encontrada' });
-    }
-    
-    campaign.status = 'paused';
-    remarketingCampaigns.set(id, campaign);
-    saveRemarketingToFile();
-    
-    addLog('REMARKETING_PAUSED', `Campanha pausada: ${campaign.name}`, 
-        { campaignId: id }, LOG_LEVELS.INFO);
-    
-    res.json({ success: true, message: 'Campanha pausada', campaign });
-});
-
-app.put('/api/remarketing/campaigns/:id/stop', (req, res) => {
-    const { id } = req.params;
-    const campaign = remarketingCampaigns.get(id);
-    
-    if (!campaign) {
-        return res.status(404).json({ success: false, error: 'Campanha não encontrada' });
-    }
-    
-    campaign.status = 'stopped';
-    campaign.progress.stoppedAt = new Date().toISOString();
-    remarketingCampaigns.set(id, campaign);
-    saveRemarketingToFile();
-    
-    addLog('REMARKETING_STOPPED', `Campanha parada: ${campaign.name}`, 
-        { campaignId: id }, LOG_LEVELS.INFO);
-    
-    res.json({ success: true, message: 'Campanha parada definitivamente', campaign });
-});
-
-app.delete('/api/remarketing/campaigns/:id', (req, res) => {
-    const { id } = req.params;
-    const campaign = remarketingCampaigns.get(id);
-    
-    if (!campaign) {
-        return res.status(404).json({ success: false, error: 'Campanha não encontrada' });
-    }
-    
-    if (campaign.status === 'active') {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'Pause a campanha antes de excluir' 
-        });
-    }
-    
-    remarketingCampaigns.delete(id);
-    saveRemarketingToFile();
-    
-    addLog('REMARKETING_DELETED', `Campanha excluída: ${campaign.name}`, 
-        { campaignId: id }, LOG_LEVELS.INFO);
-    
-    res.json({ success: true, message: 'Campanha excluída com sucesso' });
-});
-
-app.get('/api/remarketing/campaigns/:id/status', (req, res) => {
-    const { id } = req.params;
-    const campaign = remarketingCampaigns.get(id);
-    
-    if (!campaign) {
-        return res.status(404).json({ success: false, error: 'Campanha não encontrada' });
-    }
-    
-    // Calcular status das instâncias
-    const instancesStatus = INSTANCES.map(instanceName => {
-        const sentToday = remarketingInstanceCounters.get(instanceName) || 0;
-        const lastSend = remarketingInstanceLastSend.get(instanceName);
+    phones.forEach(phone => {
+        // Remover caracteres não numéricos
+        const cleanPhone = phone.replace(/\D/g, '');
         
-        let nextAvailable = null;
-        if (lastSend) {
-            const minDelay = campaign.delayMin * 60 * 1000;
-            const nextTime = lastSend + minDelay;
-            if (nextTime > Date.now()) {
-                nextAvailable = new Date(nextTime).toISOString();
-            }
+        // Validar: deve ter entre 10 e 13 dígitos
+        if (cleanPhone.length >= 10 && cleanPhone.length <= 13) {
+            validPhones.push(cleanPhone);
+        } else {
+            invalidPhones.push(phone);
         }
-        
-        return {
-            name: instanceName,
-            sentToday,
-            limit: campaign.dailyLimitPerInstance,
-            available: sentToday < campaign.dailyLimitPerInstance,
-            lastSend: lastSend ? new Date(lastSend).toISOString() : null,
-            nextAvailable
-        };
     });
     
-    const percentage = campaign.leads.length > 0 
-        ? Math.round((campaign.progress.sent / campaign.leads.length) * 100) 
-        : 0;
-    
-    res.json({ 
-        success: true, 
-        campaign: {
-            ...campaign,
+    return { validPhones, invalidPhones };
+}
+
+// Criar campanha
+app.post('/api/campaigns', async (req, res) => {
+    try {
+        const { name, phoneList, funnelId, instanceName, delayMin, delayMax } = req.body;
+        
+        if (!name || !phoneList || !funnelId || !instanceName) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Nome, lista de telefones, funil e instância são obrigatórios' 
+            });
+        }
+        
+        if (!funis.has(funnelId)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Funil não encontrado' 
+            });
+        }
+        
+        if (!INSTANCES.includes(instanceName)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Instância inválida' 
+            });
+        }
+        
+        // Validar lista de telefones
+        const { validPhones, invalidPhones } = validatePhoneList(phoneList);
+        
+        if (validPhones.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Nenhum telefone válido na lista' 
+            });
+        }
+        
+        const campaignId = 'CAMP_' + Date.now();
+        
+        const campaign = {
+            id: campaignId,
+            name: name.trim(),
+            leads: validPhones,
+            funnelId,
+            instanceName,
+            delayMin: delayMin || 45,
+            delayMax: delayMax || 60,
+            status: 'paused',
             progress: {
-                ...campaign.progress,
-                percentage
-            }
-        },
-        instancesStatus
-    });
+                sent: 0,
+                errors: 0,
+                total: validPhones.length
+            },
+            leadsSent: [],
+            createdAt: new Date().toISOString()
+        };
+        
+        batchCampaigns.set(campaignId, campaign);
+        await saveCampaignsToFile();
+        
+        addLog('CAMPAIGN_CREATED', `Campanha criada: ${name}`, 
+            { campaignId, totalLeads: validPhones.length }, LOG_LEVELS.INFO);
+        
+        res.json({ 
+            success: true, 
+            message: 'Campanha criada com sucesso',
+            campaignId,
+            validPhones: validPhones.length,
+            invalidPhones: invalidPhones.length
+        });
+        
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Iniciar campanha
+app.post('/api/campaigns/:id/start', (req, res) => {
+    const result = startCampaign(req.params.id);
+    
+    if (result.success) {
+        res.json({ success: true, message: 'Campanha iniciada' });
+    } else {
+        res.status(400).json(result);
+    }
+});
+
+// Pausar campanha
+app.post('/api/campaigns/:id/pause', (req, res) => {
+    const result = pauseCampaign(req.params.id);
+    
+    if (result.success) {
+        res.json({ success: true, message: 'Campanha pausada' });
+    } else {
+        res.status(400).json(result);
+    }
+});
+
+// Excluir campanha
+app.delete('/api/campaigns/:id', async (req, res) => {
+    const campaignId = req.params.id;
+    const campaign = batchCampaigns.get(campaignId);
+    
+    if (!campaign) {
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Campanha não encontrada' 
+        });
+    }
+    
+    // Pausar primeiro se estiver rodando
+    if (campaign.status === 'running') {
+        pauseCampaign(campaignId);
+    }
+    
+    batchCampaigns.delete(campaignId);
+    await saveCampaignsToFile();
+    
+    addLog('CAMPAIGN_DELETED', `Campanha excluída: ${campaign.name}`, 
+        { campaignId }, LOG_LEVELS.INFO);
+    
+    res.json({ success: true, message: 'Campanha excluída' });
+});
+
+// Obter detalhes de uma campanha
+app.get('/api/campaigns/:id', (req, res) => {
+    const campaign = batchCampaigns.get(req.params.id);
+    
+    if (!campaign) {
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Campanha não encontrada' 
+        });
+    }
+    
+    res.json({ success: true, data: campaign });
 });
 
 app.get('/api/conversations', (req, res) => {
@@ -2310,44 +1948,39 @@ async function initializeData() {
     await loadFunnelsFromFile();
     await loadConversationsFromFile();
     await loadPhrasesFromFile();
-    await loadManualTriggersFromFile();
-    await loadRemarketingFromFile();
+    await loadCampaignsFromFile();
     await loadLogsFromFile();
     console.log('✅ Inicialização concluída');
     console.log('📊 Funis:', funis.size);
     console.log('💬 Conversas:', conversations.size);
     console.log('🔑 Frases:', phraseTriggers.size);
-    console.log('🎯 Frases Manuais:', manualTriggers.size);
-    console.log('📢 Campanhas:', remarketingCampaigns.size);
+    console.log('📨 Campanhas:', batchCampaigns.size);
     console.log('📋 Logs:', logs.length);
-    
-    // Iniciar scheduler de remarketing
-    startRemarketingScheduler();
 }
 
 app.listen(PORT, async () => {
     console.log('='.repeat(70));
-    console.log('🚀 KIRVANO + PERFECTPAY + REMARKETING V5.4 - SISTEMA COMPLETO');
+    console.log('🚀 KIRVANO SYSTEM V5.3 - SISTEMA COMPLETO DE FUNIS');
     console.log('='.repeat(70));
     console.log('Porta:', PORT);
     console.log('Evolution:', EVOLUTION_BASE_URL);
     console.log('Instâncias:', INSTANCES.length);
     console.log('');
-    console.log('✅ NOVIDADES V5.4:');
-    console.log('  1. 🆕 SISTEMA DE REMARKETING (Campanhas automáticas)');
-    console.log('  2. ✅ Webhook PerfectPay integrado');
-    console.log('  3. ✅ Frases de disparo manual');
-    console.log('  4. ✅ Distribuição inteligente entre instâncias');
-    console.log('  5. ✅ Cooldowns e limites diários');
-    console.log('  6. ✅ Sistema de logs completo');
+    console.log('✅ NOVIDADES V6.0:');
+    console.log('  1. ✅ Frases de gatilho do CLIENTE funcionando');
+    console.log('  2. ✅ 15 instâncias (GABY01-GABY15)');
+    console.log('  3. ✅ Sistema de logs completo');
+    console.log('  4. ✅ Webhooks Kirvano e PerfectPay');
+    console.log('  5. 🆕 DISPARO MANUAL simplificado (em breve)');
     console.log('');
     console.log('📡 Endpoints:');
-    console.log('  POST /webhook/kirvano                    - Eventos Kirvano');
-    console.log('  POST /webhook/perfect                    - Eventos PerfectPay');
-    console.log('  POST /webhook/evolution                  - Mensagens WhatsApp');
-    console.log('  GET  /api/remarketing/campaigns          - Listar campanhas');
-    console.log('  POST /api/remarketing/campaigns          - Criar campanha');
-    console.log('  PUT  /api/remarketing/campaigns/:id/...  - Controlar campanha');
+    console.log('  POST /webhook/kirvano           - Eventos Kirvano');
+    console.log('  POST /webhook/perfect           - Eventos PerfectPay');
+    console.log('  POST /webhook/evolution         - Mensagens WhatsApp');
+    console.log('  GET  /api/manual-triggers       - Listar frases manuais');
+    console.log('  POST /api/manual-triggers       - Criar frase manual');
+    console.log('  PUT  /api/manual-triggers/:id   - Atualizar frase manual');
+    console.log('  DELETE /api/manual-triggers/:id - Deletar frase manual');
     console.log('');
     console.log('🌐 Frontend:');
     console.log('  http://localhost:' + PORT + '           - Dashboard principal');
