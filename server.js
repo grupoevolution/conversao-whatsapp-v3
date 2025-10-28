@@ -902,9 +902,9 @@ async function advanceConversation(phoneKey, replyText, reason) {
 // ============ CAMPANHAS EM LOTE ============
 
 async function sendSingleFunnel(phone, funnelId, instanceName) {
-    const phoneKey = uuidv4();
     const normalizedPhone = phone.startsWith('55') ? phone : '55' + phone;
     const remoteJid = normalizedPhone + '@s.whatsapp.net';
+    const phoneKey = extractPhoneKey(normalizedPhone); // ✅ Usar extractPhoneKey em vez de UUID
     
     try {
         addLog('SINGLE_SEND_START', `Enviando funil para ${phone}`, 
@@ -912,6 +912,9 @@ async function sendSingleFunnel(phone, funnelId, instanceName) {
         
         // Setar sticky instance
         stickyInstances.set(phoneKey, instanceName);
+        
+        // Registrar o telefone no índice
+        registerPhone(normalizedPhone, phoneKey);
         
         // Iniciar funil
         await startFunnel(
@@ -1250,6 +1253,12 @@ app.post('/webhook/evolution', async (req, res) => {
         
         const remoteJid = messageData.key.remoteJid;
         const fromMe = messageData.key.fromMe;
+        
+        // Ignorar mensagens enviadas por você (fromMe: true)
+        if (fromMe) {
+            return res.json({ success: true });
+        }
+        
         const messageText = extractMessageText(messageData.message);
         const instanceName = data.instance || null;
         
@@ -1262,11 +1271,6 @@ app.post('/webhook/evolution', async (req, res) => {
         if (!phoneKey || phoneKey.length !== 8) {
             addLog('EVOLUTION_INVALID_PHONE', 'PhoneKey inválido', 
                 { requestId, phone: incomingPhone }, LOG_LEVELS.WARNING);
-            return res.json({ success: true });
-        }
-        
-        // Ignorar mensagens enviadas por você (fromMe: true)
-        if (fromMe) {
             return res.json({ success: true });
         }
         
